@@ -1,4 +1,5 @@
 import argparse
+import shutil
 import sys
 import time
 import torch.nn.parallel
@@ -15,7 +16,7 @@ model_names = sorted(name for name in models.__dict__
 
 parser = argparse.ArgumentParser(description='PyTorch premiRNA Training')
 parser.add_argument('data', metavar='DIR', help='path to dataset')
-parser.add_argument('--arch', '-a', metavar='ARCH', default='deepmir_cw',
+parser.add_argument('--arch', '-a', metavar='ARCH', default='deepmir_cw_bn',
                     help='model architecture: ' + ' | '.join(model_names) + ' (default: deepmir)')
 parser.add_argument('--whitened_layers', default='6')  # check the final conv layer first
 parser.add_argument('--act_mode', default='pool_max')
@@ -27,13 +28,13 @@ parser.add_argument('--epochs', default=100, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=64, type=int,
+parser.add_argument('-b', '--batch-size', default=56, type=int,
                     metavar='N', help='mini-batch size (default: 256)')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
-parser.add_argument('--weight-decay', '--wd', default=5e-4, type=float,
+parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)')
 parser.add_argument('--concepts', type=str, required=True)
 parser.add_argument('--print-freq', '-p', default=10, type=int,
@@ -58,12 +59,12 @@ def main():
     print("args", args)
 
     torch.manual_seed(args.seed)
-    # torch.cuda.manual_seed_all(args.seed)
 
     random.seed(args.seed)
 
     args.prefix += '_' + '_'.join(args.whitened_layers.split(','))
 
+    model = None
     # create model
     if args.arch == "resnet_cw":
         if args.depth == 50:
@@ -71,50 +72,48 @@ def main():
                                         layers=[3, 4, 6, 3], model_file='./checkpoints/resnet50_isic.pth.tar')
         elif args.depth == 18:
             model = ResidualNetTransfer(2, args, [int(x) for x in args.whitened_layers.split(',')], arch='resnet18',
-                                        layers=[2, 2, 2, 2])  # , model_file='./checkpoints/resnet18_isic.pth.tar')
-    elif args.arch == "resnet_original" or args.arch == "resnet_baseline":
-        if args.depth == 50:
-            model = ResidualNetBN(2, args, arch='resnet50', layers=[3, 4, 6, 3],
-                                  model_file='./checkpoints/resnet50_isic.pth.tar')
-            # model = models.resnet50(num_classes = 2)
-        if args.depth == 18:
-            model = models.resnet18(num_classes=2)
-            # model = ResidualNetBN(2, args, arch = 'resnet18', layers = [2, 2, 2, 2],
-            # model_file='./checkpoints/resnet18_isic.pth.tar')
-    elif args.arch == "densenet_cw":
-        model = DenseNetTransfer(2, args, [int(x) for x in args.whitened_layers.split(',')], arch='densenet161',
-                                 model_file='./checkpoints/densenet161_places365.pth.tar')
-    elif args.arch == 'densenet_original':
-        model = DenseNetBN(2, args, arch='densenet161', model_file='./checkpoints/densenet161_places365.pth.tar')
-    elif args.arch == "vgg16_cw":
-        model = VGGBNTransfer(2, args, [int(x) for x in args.whitened_layers.split(',')], arch='vgg16_bn',
-                              model_file='./checkpoints/vgg16_bn_places365_12_model_best.pth.tar')
-    elif args.arch == "vgg16_bn_original":
-        model = VGGBN(2, args, arch='vgg16_bn',
-                      model_file='./checkpoints/vgg16_bn_places365_12_model_best.pth.tar')  # 'vgg16_bn_places365.pt')
+                                        layers=[2, 2, 2, 2],
+                                        model_file='checkpoints/resnet_premirna_checkpoints/RESNET_PREMIRNA_BN_checkpoint.pth.tar')
+    elif args.arch == "resnet_bn":
+        model = ResidualNetBN(2, args, arch='resnet18', layers=[2, 2, 2, 2],
+                              model_file='checkpoints/resnet_premirna_checkpoints/RESNET_PREMIRNA_PRETRAIN_checkpoint.pth.tar')
     elif args.arch == "deepmir_cw":
-        model = DeepMirTransfer(2, args, [int(x) for x in args.whitened_layers.split(',')], arch='deepmir_cw',
-                                model_file='checkpoints/deepmir_cw.pth')
-
+        model = DeepMirTransfer(args, [int(x) for x in args.whitened_layers.split(',')], arch='deepmir_cw',
+                                model_file='checkpoints/deepmir_related_checkpoints/nonCW_training/deepmir_cw.pth')
+    elif args.arch == "deepmir_bn":
+        model = DeepMirBN(args, arch='deepmir_bn', model_file=None)
+    elif args.arch == "deepmir_cw_bn":
+        # model = DeepMirTransfer(args, [int(x) for x in args.whitened_layers.split(',')], arch='deepmir_cw',
+        #                         model_file='checkpoints/deepmir_bn.pth')
+        # model = DeepMirTransfer(args, [int(x) for x in args.whitened_layers.split(',')], arch='deepmir_cw',
+        #                         model_file='checkpoints/deepmir_cw_bn.pth')
+        model = DeepMirTransfer(args, [int(x) for x in args.whitened_layers.split(',')], arch='deepmir_cw',
+                                model_file='checkpoints/deepmir_related_checkpoints/DEEPMIR_PREMIRNA_BN_checkpoint_'
+                                           'new.pth.tar')
+        # model = DeepMirTransfer(args, [int(x) for x in args.whitened_layers.split(',')], arch='deepmir_cw')
+    elif args.arch == "deepmir_resnet_bn":
+        model = DeepMirResNetBN(args, arch='deepmir_resnet_bn', model_file='checkpoints/resnet_premirna_checkpoints'
+                                                                           '/DEEPMIR_RESNET_PREMIRNA_PRETRAIN_'
+                                                                           'checkpoint.pth.tar')
+    elif args.arch == 'deepmir_resnet_bn_v2':
+        model = DeepMirResNetBNv2(args, arch='deepmir_resnet_bn_v2', model_file=None)
+    elif args.arch == 'deepmir_resnet_cw_v2':
+        model = DeepMirResNetTransferv2(args, [int(x) for x in args.whitened_layers.split(',')],
+                                        arch='deepmir_resnet_cw_v2', model_file='checkpoints/presence_terminal_loop/'
+                                                                                'DEEPMIR_RESNET_PREMIRNA_v2_BN_1'
+                                                                                '_checkpoint.pth.tar')
+    elif args.arch == "deepmir_resnet_cw":
+        model = DeepMirResNetTransfer(args, [int(x) for x in args.whitened_layers.split(',')], arch='deepmir_resnet_cw',
+                                      model_file='checkpoints/DEEPMIR_RESNET_PREMIRNA_BN_2_checkpoint.pth.tar')
 
     # define loss function (criterion) and optimizer
-    # criterion = nn.CrossEntropyLoss().cuda()
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+    optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 
-    # model = torch.nn.DataParallel(model, device_ids=list(range(args.ngpu)))
     model = torch.nn.DataParallel(model)
-
-    # model = model.cuda()
-    model = model
-    print("model")
-    print(model)
-
+    print('Model architecture: ', model)
     # get the number of model parameters
-    print('Number of model parameters: {}'.format(
-        sum([p.data.nelement() for p in model.parameters()])))
+    print(f'Number of model parameters: {sum([p.data.nelement() for p in model.parameters()])}')
 
     cudnn.benchmark = True
 
@@ -124,17 +123,17 @@ def main():
     testdir = os.path.join(args.data, 'test')
     conceptdir_train = os.path.join(args.data, 'concept_train')
     conceptdir_test = os.path.join(args.data, 'concept_test')
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+    # normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+    #                                  std=[0.229, 0.224, 0.225])
 
     train_loader = balanced_data_loader(args, traindir)
-    test_loader_2 = balanced_data_loader(args, testdir, 'test')
+    test_loader_2 = balanced_data_loader(args, testdir)
 
     concept_loaders = [
         torch.utils.data.DataLoader(
             datasets.ImageFolder(os.path.join(conceptdir_train, concept), transforms.Compose([
                 transforms.ToTensor(),
-                normalize,
+                # normalize,
             ])),
             batch_size=args.batch_size, shuffle=True,
             num_workers=args.workers, pin_memory=False)
@@ -144,23 +143,29 @@ def main():
     # val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
     #     transforms.ToTensor(),
     #     normalize, ]))
-
     test_dataset = datasets.ImageFolder(testdir, transforms.Compose([
         transforms.ToTensor(),
-        normalize, ]))
+        # normalize,
+    ]))
     args.test_weights = get_class_weights(test_dataset.imgs, len(test_dataset.classes))
-    # we have a balanced dataset so this should be [0.5 0.5]
     print(args.test_weights)
     test_loader = torch.utils.data.DataLoader(test_dataset,
-                                              batch_size=args.batch_size, shuffle=True,
+                                              batch_size=args.batch_size, shuffle=False,
                                               num_workers=args.workers, pin_memory=False)
+    # test_loader = torch.utils.data.DataLoader(
+    #     datasets.ImageFolder(testdir, transforms.Compose([
+    #         transforms.ToTensor(),
+    #         normalize,
+    #     ])),
+    #     batch_size=args.batch_size, shuffle=False,
+    #     num_workers=args.workers, pin_memory=False)
 
     test_loader_with_path = torch.utils.data.DataLoader(
         ImageFolderWithPaths(testdir, transforms.Compose([
             transforms.ToTensor(),
-            normalize,
+            # normalize,
         ])),
-        batch_size=args.batch_size, shuffle=True,
+        batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=False)
 
     # val_loader_2 = torch.utils.data.DataLoader(
@@ -174,18 +179,21 @@ def main():
 
     if not args.evaluate:
         print("Start training")
+        epoch = None
         best_prec1 = 0
-        for epoch in range(args.start_epoch, args.start_epoch + 100):
+        for epoch in range(args.start_epoch, args.start_epoch + args.epochs):
             adjust_learning_rate(optimizer, epoch)
 
             # train for one epoch
-            if args.arch == "resnet_cw" or args.arch == "resnet_original" or args.arch == "deepmir_cw":
-                # train(train_loader, None, model, criterion, optimizer, epoch)
+            if args.arch == "resnet_cw" or args.arch == "resnet_original" or args.arch == "deepmir_cw" or \
+                    args.arch == "deepmir_cw_bn" or args.arch == "deepmir_bn" or \
+                    args.arch == "resnet_bn" or args.arch == "deepmir_resnet_bn" or args.arch == "deepmir_resnet_cw" \
+                    or args.arch == "deepmir_resnet_bn_v2" or args.arch == "deepmir_resnet_cw_v2":
                 train(train_loader, concept_loaders, model, criterion, optimizer, epoch)
             elif args.arch == "resnet_baseline":
                 train_baseline(train_loader, concept_loaders, model, criterion, optimizer, epoch)
             # evaluate on validation set
-            prec1 = validate(test_loader, model, criterion, epoch)
+            prec1 = validate(test_loader, model, criterion)
 
             # remember best prec@1 and save checkpoint
             is_best = prec1 > best_prec1
@@ -198,29 +206,45 @@ def main():
                 'optimizer': optimizer.state_dict(),
             }, is_best, args.prefix)
         print(best_prec1)
-        validate(test_loader, model, criterion, epoch)
+        validate(test_loader, model, criterion)
     else:
-        print('in else')
-        # model = load_resnet_model(args, arch=args.arch, depth=args.depth, whitened_layer=args.whitened_layers,
-        #                           dataset='isic')
-        # model = load_deepmir_model(args, arch=args.arch, depth=args.depth, whitened_layer=args.whitened_layers,
-        #                            dataset='premirna')
-        # get_representation_distance_to_center(args, test_loader, '8', arch='resnet_original')
-        # intra_concept_dot_product_vs_inter_concept_dot_product(args, conceptdir_test, '8',
-        # plot_cpt = args.concepts.split(','), arch='resnet_cw', dataset = 'isic')
-        # intra_concept_dot_product_vs_inter_concept_dot_product(args, conceptdir_test, '8',
-        # plot_cpt = args.concepts.split(','), arch='resnet_baseline')
-        # intra_concept_dot_product_vs_inter_concept_dot_product(args, conceptdir_test, '8',
-        # plot_cpt = args.concepts.split(','), arch='resnet_original', dataset = 'isic')
+        if args.arch == "deepmir_resnet_cw":
+            model = load_deepmir_resnet_model(args, arch=args.arch, whitened_layer=args.whitened_layers)
+        elif args.arch == "deepmir_resnet_bn":
+            model = load_deepmir_resnet_bn_model(args, whitened_layer=args.whitened_layers)
+        elif args.arch == "resnet_cw":
+            model = load_resnet_model(args, arch=args.arch, checkpoint_folder="./checkpoints",
+                                      whitened_layer=args.whitened_layers)
+        elif args.arch == "deepmir_resnet_cw_v2":
+            model = load_deepmir_resnet_cw_v2_model(args, checkpoint_folder="./checkpoints",
+                                                    whitened_layer=args.whitened_layers)
 
+        # cannot invoke validation before the concept importance is calculated (bc that uses a backward pass..)
         # print("Start testing")
-        # validate(test_loader, model, criterion, args.start_epoch)
-        # print("Start Ploting")
-        # plot_figures(args, model, test_loader_with_path, train_loader, concept_loaders, conceptdir_test)
-        # concept_permutation_importance(args, test_loader_2, '5', criterion, arch='resnet_cw', dataset='isic',
-        # num_concepts=3)
-        # concept_gradient_importance(args, test_loader_2, '8', criterion, arch='resnet_cw', dataset='isic')
-        # saliency_map_concept_cover_2(args, val_loader_2, '8', arch='resnet_cw', dataset='isic', num_concepts=76)
+        # validate(test_loader, model, criterion)
+        print("Start Plotting")
+        if len(args.whitened_layers) > 1:
+            whitened_layers = [int(x) for x in args.whitened_layers.split(',')]
+            for layer in whitened_layers:
+                concept_importance_per_class = concept_gradient_importance(args, test_loader,
+                                                                           layer=layer, arch=args.arch,
+                                                                           dataset=None, num_classes=2, model=model)
+            print(concept_importance_per_class)
+
+        else:
+            print('in this else')
+            print(model)
+            concept_importance_per_class = concept_gradient_importance(args, test_loader,
+                                                                       layer=args.whitened_layers,
+                                                                       arch=args.arch,
+                                                                       dataset=None, num_classes=2, model=model)
+            print(concept_importance_per_class)
+
+            plot_figures(args, model, test_loader_with_path, train_loader, concept_loaders, conceptdir_test, test_loader,
+                         criterion)
+        # don't know what to do with the function below?
+        # get_representation_distance_to_center(args, test_loader, args.whitened_layers, arch='deepmir_resnet_cw_separate_CW',
+        #                                       model=model)
 
 
 def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
@@ -234,26 +258,24 @@ def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
 
     end = time.time()
     for i, (input, target) in enumerate(train_loader):
-        # if (i + 1) % 20 == 0:
-        #     model.eval()
-        #     with torch.no_grad():
-        #         # update the gradient matrix G
-        #         for concept_index, concept_loader in enumerate(concept_loaders):
-        #             # print(concept_index)
-        #             model.module.change_mode(concept_index)
-        #             for j, (X, _) in enumerate(concept_loader):
-        #                 X_var = torch.autograd.Variable(X).cuda()
-        #                 model(X_var)
-        #                 break
-        #         model.module.update_rotation_matrix()
-        #         # change to ordinary mode
-        #         model.module.change_mode(-1)
-        #     model.train()
+        if (i + 1) % 30 == 0:
+            model.eval()
+        with torch.no_grad():
+            # update the gradient matrix G
+            for concept_index, concept_loader in enumerate(concept_loaders):
+                model.module.change_mode(concept_index)
+                for j, (X, _) in enumerate(concept_loader):
+                    # X_var = torch.autograd.Variable(X).cuda()
+                    X_var = torch.autograd.Variable(X)
+                    model(X_var)
+                    break
+            model.module.update_rotation_matrix()
+            # change to ordinary mode
+            model.module.change_mode(-1)
+        model.train()
         # measure data loading time
         data_time.update(time.time() - end)
 
-        # target = target.cuda()
-        target = target
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
         # compute output
@@ -281,19 +303,16 @@ def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
                 data_time=data_time, loss=losses, top1=top1))
 
 
-def validate(val_loader, model, criterion, epoch):
+def validate(val_loader, model, criterion):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
-    baccs = AverageMeter()
 
     # switch to evaluate mode
     model.eval()
     end = time.time()
     with torch.no_grad():
         for i, (input, target) in enumerate(val_loader):
-            # target = target.cuda()
-            target = target
             input_var = torch.autograd.Variable(input)
             target_var = torch.autograd.Variable(target)
 
@@ -302,10 +321,8 @@ def validate(val_loader, model, criterion, epoch):
             loss = criterion(output, target_var)
             # measure accuracy and record loss
             [prec1] = accuracy(output.data, target, topk=(1,))
-            [bacc] = weighted_accuracy(output.data, target)
             losses.update(loss.data, input.size(0))
             top1.update(prec1.item(), input.size(0))
-            baccs.update(bacc.item(), input.size(0))
 
             # measure elapsed time
             batch_time.update(time.time() - end)
@@ -315,14 +332,13 @@ def validate(val_loader, model, criterion, epoch):
                 print('Test: [{0}/{1}]\t'
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                      'Balance-acc {baccs.val:.3f} ({baccs.avg:.3f})'.format(
+                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
                     i, len(val_loader), batch_time=batch_time, loss=losses,
-                    top1=top1, baccs=baccs))
+                    top1=top1))
 
-    print(' * Prec@1 {top1.avg:.3f}\t'
-          'Balance-acc {baccs.avg:.3f}'.format(top1=top1, baccs=baccs))
-    return baccs.avg
+    print(' * Prec@1 {top1.avg:.3f}'.format(top1=top1))
+
+    return top1.avg
 
 
 '''
@@ -377,15 +393,14 @@ def train_baseline(train_loader, concept_loaders, model, criterion, optimizer, e
             for concept_index, concept_loader in enumerate(concept_loaders):
                 for j, (X, _) in enumerate(concept_loader):
                     y += [concept_index] * X.size(0)
-                    # X_var = torch.autograd.Variable(X).cuda()
                     X_var = torch.autograd.Variable(X)
                     model(X_var)
                     break
 
             inter_feature = torch.cat(inter_feature, 0)
-            # y_var = torch.Tensor(y).long().cuda()
             y_var = torch.Tensor(y).long()
             f_size = inter_feature.size()
+            y_pred = None
             if activation_mode == 'mean':
                 y_pred = F.avg_pool2d(inter_feature, f_size[2:]).squeeze()
             elif activation_mode == 'max':
@@ -412,7 +427,6 @@ def train_baseline(train_loader, concept_loaders, model, criterion, optimizer, e
         # measure data loading time
         data_time.update(time.time() - end)
 
-        # target = target.cuda()
         target = target
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
@@ -448,60 +462,105 @@ def train_baseline(train_loader, concept_loaders, model, criterion, optimizer, e
                 epoch, i, len(train_loader), batch_time=batch_time, data_time=data_time, loss=losses,
                 loss_a=loss_aux, top1=top1, top5=top5, top1_cpt=top1_cpt))
 
-#
-# def plot_figures(args, model, test_loader_with_path, train_loader, concept_loaders, conceptdir):
-#     concept_name = args.concepts.split(',')
-#
-#     if not os.path.exists('./plot/' + '_'.join(concept_name)):
-#         os.mkdir('./plot/' + '_'.join(concept_name))
-#
-#     # print("Plot top50 activated images")
-#     # model = load_resnet_model(args, arch='resnet_cw', depth=18, whitened_layer='8', dataset='isic')
-#     model = load_deepmir_model(args, arch=args.arch, depth=args.depth, whitened_layer=args.whitened_layers,
-#                                    dataset='premirna')
-#     # plot_concept_top50(args, test_loader_with_path, model, '8', 297, activation_mode = args.act_mode)
-#     plot_concept_top50(args, test_loader_with_path, model, '6', 50, activation_mode=args.act_mode)
-#     # plot_concept_top50(args, test_loader_with_path, model, '8', 313, activation_mode = args.act_mode)
-#     # print("Plot 2d slice of representation")
-#     # plot_concept_representation(args, test_loader_with_path, model, '1', plot_cpt = [concept_name[1],concept_name[2]],
-#     # activation_mode = args.act_mode)
-#     # plot_top10(args, plot_cpt = concept_name, layer = 1)
-#
-#     # print("Plot correlation")
-#     # model = load_resnet_model(args, arch = 'resnet_cw', depth=18, whitened_layer='8', dataset = 'isic')
-#     # args.arch = 'resnet_cw'
-#     # plot_correlation(args, test_loader_with_path, model, 8)
-#     # args.arch = 'resnet_original'
-#     # model = load_resnet_model(args, arch = 'resnet_original', depth=18, dataset = 'isic')
-#     # plot_correlation(args, test_loader_with_path, model, 8)
-#     # model = load_resnet_model(args, arch = 'resnet_baseline', depth=18, whitened_layer='8', dataset = 'isic')
-#     # args.arch = 'resnet_baseline'
-#     # plot_correlation(args, test_loader_with_path, model, 8)
-#
-#     # print("Plot trajectory")
-#     # args.arch = 'resnet_cw'
-#     # plot_trajectory(args, test_loader_with_path, '1,2,3,4,5,6,7,8', plot_cpt = [concept_name[0],concept_name[1]])
-#
-#     # print("Plot AUC-concept_purity")
-#     # aucs_cw = plot_auc_cw(args, conceptdir, '1,2,3,4,5,6,7,8', plot_cpt = concept_name,
-#     # activation_mode = args.act_mode, dataset = 'isic')
-#     # print("Running AUCs svm")
-#     # model = load_resnet_model(args, arch='resnet_original', depth=18, dataset = 'isic')
-#     # aucs_svm = plot_auc_lm(args, model, concept_loaders, train_loader, conceptdir, '1,2,3,4,5,6,7,8',
-#     # plot_cpt = concept_name, model_type = 'svm')
-#     # print("Running AUCs lr")
-#     # model = load_resnet_model(args, arch='resnet_original', depth=18, dataset = 'isic')
-#     # aucs_lr = plot_auc_lm(args, model, concept_loaders, train_loader, conceptdir, '1,2,3,4,5,6,7,8',
-#     # plot_cpt = concept_name, model_type = 'lr')
-#     # print("Running AUCs best filter")
-#     # model = load_resnet_model(args, arch='resnet_original', depth=18, dataset = 'isic')
-#     # aucs_filter = plot_auc_filter(args, model, conceptdir, '1,2,3,4,5,6,7,8', plot_cpt = concept_name)
-#     # print("AUC plotting")
-#     # plot_auc(args, 0, 0, 0, 0, plot_cpt = concept_name)
-#     # print("End plotting")
-#     # model = load_resnet_model(args, arch = 'resnet_baseline', depth=18, whitened_layer='8', dataset = 'isic')
-#     # print("Running AUCs best filter")
-#     # aucs_filter = plot_auc_filter(args, model, conceptdir, '8', plot_cpt = concept_name)
+
+def plot_figures(args, model, test_loader_with_path, train_loader, concept_loaders, conceptdir, test_loader_withoutpath,
+                 criterion):
+    concept_name = args.concepts.split(',')
+
+    if not os.path.exists('./plot/' + '_'.join(concept_name)):
+        os.mkdir('./plot/' + '_'.join(concept_name))
+
+    if args.arch == "deepmir_resnet_bn":
+        print("Plot correlation")
+        plot_correlation_BN(args, test_loader_with_path, model, layer=args.whitened_layers)
+    elif args.arch == "deepmir_resnet_cw" or args.arch == "resnet_cw":
+        if len(args.whitened_layers) > 1:
+            whitened_layers = [int(x) for x in args.whitened_layers.split(',')]
+            for layer in whitened_layers:
+                print("Plot correlation")
+                plot_correlation(args, test_loader_with_path, model, layer=str(layer))
+                print("Plot intra- and inter-concept similarities")
+                intra_concept_dot_product_vs_inter_concept_dot_product(args, conceptdir, str(layer),
+                                                                       plot_cpt=args.concepts.split(','),
+                                                                       arch='deepmir_resnet_cw',
+                                                                       model=model)
+                print("Plot concept importance for overall classifier")
+                concept_permutation_importance(args, test_loader_withoutpath, layer, criterion,
+                                               arch=args.arch, dataset=None, num_concepts=len(args.concepts.split(',')),
+                                               model=model)
+                print("Plot concept importance for target classes")
+                concept_importance_per_class = concept_gradient_importance(args, test_loader_withoutpath,
+                                                                           layer, criterion, arch=args.arch,
+                                                                           dataset=None, num_classes=2, model=model)
+                print(concept_importance_per_class)
+            print("Plot top50 activated images")
+            # False is if you want the top50 concept images for the whitened layer and the assigned neuron,
+            # otherwise you can say for which layer neuron in that layer you want the top 50
+            plot_concept_top50(args, test_loader_with_path, model, args.whitened_layers,
+                               False, activation_mode=args.act_mode)
+            plot_top10(args, plot_cpt=args.concepts.split(','), layer=args.whitened_layers)
+            print("Plot 2d slice of representation")
+            plot_concept_representation(args, test_loader_with_path, model, args.whitened_layers,
+                                        plot_cpt=[concept_name[0], concept_name[1]], activation_mode=args.act_mode)
+            print("Plot trajectory")
+            plot_trajectory(args, test_loader_with_path, args.whitened_layers, plot_cpt=[concept_name[0],
+                                                                                         concept_name[1]], model=model)
+
+        else:
+            print("Plot correlation")
+            plot_correlation(args, test_loader_with_path, model, layer=args.whitened_layers)
+            print("Plot top50 activated images")
+            # False is if you want the top50 concept images for the whitened layer and the assigned neuron,
+            # otherwise you can say for which layer neuron in that layer you want the top 50
+            plot_concept_top50(args, test_loader_with_path, model, args.whitened_layers, False,
+                               activation_mode=args.act_mode)
+            plot_top10(args, plot_cpt=args.concepts.split(','),
+                       layer=args.whitened_layers)  # Need to have plot_concept_top50
+            # print("Plot 2d slice of representation")
+            # plot_concept_representation(args, test_loader_with_path, model, args.whitened_layers,
+            #                             plot_cpt=[concept_name[0], concept_name[1]], activation_mode=args.act_mode)
+            # print("Plot intra- and inter-concept similarities")
+            # intra_concept_dot_product_vs_inter_concept_dot_product(args, conceptdir, args.whitened_layers,
+            #                                                        plot_cpt=args.concepts.split(','),
+            #                                                        arch='deepmir_resnet_cw',
+            #                                                        model=model)
+
+            print("Plot concept importance for overall classifier")
+            concept_permutation_importance(args, test_loader_withoutpath, args.whitened_layers, criterion,
+                                           arch=args.arch, dataset=None, num_concepts=len(args.concepts.split(',')),
+                                           model=model)
+            print("Plot concept importance for target classes")
+            concept_importance_per_class = concept_gradient_importance(args, test_loader_withoutpath,
+                                                                       args.whitened_layers,
+                                                                       criterion, arch=args.arch,
+                                                                       dataset=None, num_classes=2, model=model)
+            print(concept_importance_per_class)
+
+            #
+            # print("Plot receptive field over most activated img")
+            # saliency_map_concept_cover_2(args, test_loader_2, args.whitened_layers, arch=args.arch,
+            #                              dataset=None, num_concepts=len(args.concepts.split(',')), model=model)
+
+    # print("Plot AUC-concept_purity")
+    # aucs_cw = plot_auc_cw(args, conceptdir, '1,2,3,4,5,6,7,8', plot_cpt = concept_name,
+    # activation_mode = args.act_mode, dataset = 'isic')
+    # print("Running AUCs svm")
+    # model = load_resnet_model(args, arch='resnet_original', depth=18, dataset = 'isic')
+    # aucs_svm = plot_auc_lm(args, model, concept_loaders, train_loader, conceptdir, '1,2,3,4,5,6,7,8',
+    # plot_cpt = concept_name, model_type = 'svm')
+    # print("Running AUCs lr")
+    # model = load_resnet_model(args, arch='resnet_original', depth=18, dataset = 'isic')
+    # aucs_lr = plot_auc_lm(args, model, concept_loaders, train_loader, conceptdir, '1,2,3,4,5,6,7,8',
+    # plot_cpt = concept_name, model_type = 'lr')
+    # print("Running AUCs best filter")
+    # model = load_resnet_model(args, arch='resnet_original', depth=18, dataset = 'isic')
+    # aucs_filter = plot_auc_filter(args, model, conceptdir, '1,2,3,4,5,6,7,8', plot_cpt = concept_name)
+    # print("AUC plotting")
+    # plot_auc(args, 0, 0, 0, 0, plot_cpt = concept_name)
+    # print("End plotting")
+    # model = load_resnet_model(args, arch = 'resnet_baseline', depth=18, whitened_layer='8', dataset = 'isic')
+    # print("Running AUCs best filter")
+    # aucs_filter = plot_auc_filter(args, model, conceptdir, '8', plot_cpt = concept_name)
 
 
 def save_checkpoint(state, is_best, prefix, checkpoint_folder='./checkpoints'):
@@ -512,10 +571,6 @@ def save_checkpoint(state, is_best, prefix, checkpoint_folder='./checkpoints'):
     torch.save(state, filename)
     if is_best:
         shutil.copyfile(filename, os.path.join(checkpoint_folder, concept_name, '%s_model_best.pth.tar' % prefix))
-    # filename = os.path.join(checkpoint_folder,'%s_checkpoint.pth.tar'%prefix)
-    # torch.save(state, filename)
-    # if is_best:
-    #      shutil.copyfile(filename, os.path.join(checkpoint_folder,'%s_model_best.pth.tar'%prefix))
 
 
 class AverageMeter(object):
@@ -591,6 +646,11 @@ def make_weights_for_balanced_classes(images, nclasses):
 
 
 def get_class_weights(images, nclasses):
+    """
+    :param images:
+    :param nclasses:
+    :return:
+    """
     count = [0] * nclasses
     for item in images:
         count[item[1]] += 1
@@ -602,26 +662,15 @@ def get_class_weights(images, nclasses):
     return weight_per_class
 
 
-def balanced_data_loader(args, dataset_dir, loader_type='train'):
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-    # normalize = transforms.Normalize(mean=[0.7044832 0.5509753 0.5327961],
-    #                              std=[0.09999301 0.12828484 0.14426188])
-    if loader_type == 'train':
-        dataset = datasets.ImageFolder(dataset_dir, transforms.Compose([
-            # transforms.Scale(256),
-            # transforms.RandomSizedCrop(224),
-            # transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ]))
-    elif loader_type == 'test':
-        dataset = datasets.ImageFolder(dataset_dir, transforms.Compose([
-            # transforms.Scale(256),
-            # transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize
-        ]))
+def balanced_data_loader(args, dataset_dir):
+    """
+    :param args: arguments given in training/evaluation initialization
+    :param dataset_dir: directory where dataset is stored
+    :return: data loader that uses balanced class weights to balance the data that is fed to the model
+    """
+    dataset = datasets.ImageFolder(dataset_dir, transforms.Compose([
+        transforms.ToTensor(),
+    ]))
 
     # For unbalanced dataset we create a weighted sampler
     weights = make_weights_for_balanced_classes(dataset.imgs, len(dataset.classes))

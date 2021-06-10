@@ -132,8 +132,8 @@ def main():
     traindir = os.path.join(args.data, 'train')
     valdir = os.path.join(args.data, 'val')
     testdir = os.path.join(args.data, 'test')
-    conceptdir_train = os.path.join(args.data, 'modhsa_original/concept_train')
-    conceptdir_test = os.path.join(args.data, 'modhsa_original/concept_test')
+    conceptdir_train = os.path.join(args.data, 'preparation/datasets/modhsa_original/concept_train')
+    conceptdir_test = os.path.join(args.data, 'preparation/datasets/modhsa_original/concept_test')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
@@ -288,6 +288,7 @@ def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
                         break
                 model.module.update_rotation_matrix()
                 # change to ordinary mode
+                model.module.change_mode(-1)
                 model.module.change_mode(-1)
             model.train()
         # measure data loading time

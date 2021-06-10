@@ -17,6 +17,8 @@ for dirname, _, filenames in os.walk('modhsa_original/'):
     for filename in filenames:
         if filename == ".DS_Store":
             continue
+        if dirname[16:29] == "concept_train" or dirname[16:28] == "concept_test":
+            continue
         else:
             entry = pd.DataFrame([os.path.join(dirname, filename)], columns=['path'])
             if dirname[16:21] == "train":
@@ -69,10 +71,10 @@ for dirname, _, filenames in os.walk('modhsa_original/'):
                     entry['symmetric_bulges_count'] = len(symmetric_bulge_info)
                     for i in range(len(symmetric_bulge_info)):
                         symmetric_bulge_tables_class0.append([('index', filename),
-                                                                  ('width', symmetric_bulge_info[i][3]),
-                                                                  ('height', symmetric_bulge_info[i][4]),
-                                                                  ('width_height', str(symmetric_bulge_info[i][3]) + '_'
-                                                                   + str(symmetric_bulge_info[i][4]))])
+                                                              ('width', symmetric_bulge_info[i][3]),
+                                                              ('height', symmetric_bulge_info[i][4]),
+                                                              ('width_height', str(symmetric_bulge_info[i][3]) + '_'
+                                                               + str(symmetric_bulge_info[i][4]))])
                 else:
                     # in case the length of the symmetric bulge list is 0, there is no symmetric bulge present
                     entry['symmetric_bulge_presence'] = False
@@ -96,10 +98,10 @@ for dirname, _, filenames in os.walk('modhsa_original/'):
                     entry['symmetric_bulges_count'] = len(symmetric_bulge_info)
                     for i in range(len(symmetric_bulge_info)):
                         symmetric_bulge_tables_class1.append([('index', filename),
-                                                                  ('width', symmetric_bulge_info[i][3]),
-                                                                  ('height', symmetric_bulge_info[i][4]),
-                                                                  ('width_height', str(symmetric_bulge_info[i][3]) +
-                                                                   '_' + str(symmetric_bulge_info[i][4]))])
+                                                              ('width', symmetric_bulge_info[i][3]),
+                                                              ('height', symmetric_bulge_info[i][4]),
+                                                              ('width_height', str(symmetric_bulge_info[i][3]) +
+                                                               '_' + str(symmetric_bulge_info[i][4]))])
                 else:
                     # in case the length of the symmetric bulge list is 0, there is no symmetric bulge present
                     entry['symmetric_bulge_presence'] = False
@@ -190,6 +192,9 @@ print(data_tables['class_label'].value_counts())
 
 # %%
 def calculate_summary_stats(original_data, label_col, col_of_interest):
+    """
+
+    """
     data_stats = original_data[[label_col, col_of_interest]]
     data_stats = data_stats.groupby(label_col).describe().unstack(1).reset_index().pivot(index=label_col, values=0,
                                                                                          columns='level_1')
@@ -309,10 +314,11 @@ test_data_tables = data_tables.loc[data_tables['set'] == 'test']
 
 
 def make_dir_if_not_exists(directory):
-  if not tf.io.gfile.exists(directory):
-    tf.io.gfile.makedirs(directory)
+    if not tf.io.gfile.exists(directory):
+        tf.io.gfile.makedirs(directory)
 
- # %%
+
+# %%
 # save concept images in the subdirectories
 # first concepts that are chosen: terminal loop presence, no mismatches/gaps in 1-4nt, sequence of base pairs,
 # symmetric bulge presence, palindrome structure, AU pairs
@@ -328,11 +334,15 @@ def save_train_concepts_img(binary_concepts_of_interest, non_binary_concepts_of_
             img = Image.open(image_path)
             img_name = image_path[16::]
             img_name = img_name.replace("/", "__")  # replace / to prevent confusion when reading the path
-            make_dir_if_not_exists(f'./modhsa_original/concept_train/{binary_concepts_of_interest[i]}/{binary_concepts_of_interest[i]}')
-            img.save(f'./modhsa_original/concept_train/{binary_concepts_of_interest[i]}/{binary_concepts_of_interest[i]}/{img_name}', 'PNG')
+            make_dir_if_not_exists(
+                f'./modhsa_original/concept_train/{binary_concepts_of_interest[i]}/{binary_concepts_of_interest[i]}')
+            img.save(
+                f'./modhsa_original/concept_train/{binary_concepts_of_interest[i]}/{binary_concepts_of_interest[i]}/{img_name}',
+                'PNG')
 
     for i in range(len(non_binary_concepts_of_interest)):
-        target_data = dataframe.loc[dataframe[non_binary_concepts_of_interest[i][0]] >= non_binary_concepts_of_interest[i][1]]
+        target_data = dataframe.loc[
+            dataframe[non_binary_concepts_of_interest[i][0]] >= non_binary_concepts_of_interest[i][1]]
 
         print(len(target_data), non_binary_concepts_of_interest[i])
 
@@ -341,8 +351,11 @@ def save_train_concepts_img(binary_concepts_of_interest, non_binary_concepts_of_
             img = Image.open(image_path)
             img_name = image_path[16::]
             img_name = img_name.replace("/", "__")  # replace / to prevent confusion when reading the path
-            make_dir_if_not_exists(f'./modhsa_original/concept_train/{binary_concepts_of_interest[i]}/{binary_concepts_of_interest[i]}')
-            img.save(f'./modhsa_original/concept_train/{binary_concepts_of_interest[i]}/{binary_concepts_of_interest[i]}/{img_name}', 'PNG')
+            make_dir_if_not_exists(
+                f'./modhsa_original/concept_train/{non_binary_concepts_of_interest[i][0]}/{non_binary_concepts_of_interest[i][0]}')
+            img.save(
+                f'./modhsa_original/concept_train/{non_binary_concepts_of_interest[i][0]}/{non_binary_concepts_of_interest[i][0]}/{img_name}',
+                'PNG')
 
 
 def save_test_concepts_img(binary_concepts_of_interest, non_binary_concepts_of_interest, dataframe):
@@ -360,7 +373,8 @@ def save_test_concepts_img(binary_concepts_of_interest, non_binary_concepts_of_i
             img.save(f'./modhsa_original/concept_test/{binary_concepts_of_interest[i]}/{img_name}', 'PNG')
 
     for i in range(len(non_binary_concepts_of_interest)):
-        target_data = dataframe.loc[dataframe[non_binary_concepts_of_interest[i][0]] >= non_binary_concepts_of_interest[i][1]]
+        target_data = dataframe.loc[
+            dataframe[non_binary_concepts_of_interest[i][0]] >= non_binary_concepts_of_interest[i][1]]
 
         print(len(target_data), non_binary_concepts_of_interest[i])
 
@@ -369,20 +383,18 @@ def save_test_concepts_img(binary_concepts_of_interest, non_binary_concepts_of_i
             img = Image.open(image_path)
             img_name = image_path[16::]
             img_name = img_name.replace("/", "__")  # replace / to prevent confusion when reading the path
-            make_dir_if_not_exists(f'./modhsa_original/concept_test/{binary_concepts_of_interest[i]}')
-            img.save(f'./modhsa_original/concept_test/{binary_concepts_of_interest[i]}/{img_name}', 'PNG')
+            make_dir_if_not_exists(f'./modhsa_original/concept_test/{non_binary_concepts_of_interest[i][0]}')
+            img.save(f'./modhsa_original/concept_test/{non_binary_concepts_of_interest[i][0]}/{img_name}', 'PNG')
 
 
 binary_concepts_of_interest_train = ['presence_terminal_loop', 'AU_pair_begin_maturemiRNA',
-                                     'base_pair_successions_presence', 'symmetric_bulge_presence',
                                      'base_beginstem_4nt_clean']
 non_binary_concepts_of_interest_train = [('palindrome_True', 0.85)]  # for now, take the mean of the true class as
 # threshold
 save_train_concepts_img(binary_concepts_of_interest_train, non_binary_concepts_of_interest_train, train_data_tables)
 
 binary_concepts_of_interest_test = ['presence_terminal_loop', 'AU_pair_begin_maturemiRNA',
-                                     'base_pair_successions_presence', 'symmetric_bulge_presence',
-                                     'base_beginstem_4nt_clean']
+                                    'base_beginstem_4nt_clean']
 non_binary_concepts_of_interest_test = [('palindrome_True', 0.85)]  # for now, take the mean of the true class as
 # threshold
 save_test_concepts_img(binary_concepts_of_interest_test, non_binary_concepts_of_interest_test, test_data_tables)
