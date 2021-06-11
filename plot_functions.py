@@ -106,7 +106,7 @@ def plot_concept_top50(args, val_loader, model, whitened_layers, print_other=Fal
         for layer in layer_list:
             layer = int(layer)
             model.features[layer - 1].register_forward_hook(hook)
-    if args.arch == "deepmir_resnet_cw":
+    if args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
         for whitened_layer in layer_list:
             if int(whitened_layer) == 1:
                 model.bn1.register_forward_hook(hook)
@@ -293,7 +293,7 @@ def get_layer_representation(args, val_loader, layer, cpt_idx, model):
                 model.layer3[layer - layers[0] - layers[1] - 1].bn1.register_forward_hook(hook)
             elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
                 model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
-        elif args.arch == "deepmir_resnet_cw":
+        elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
             if int(layer) == 1:
                 model.bn1.register_forward_hook(hook)
             elif int(layer) == 2:
@@ -360,7 +360,7 @@ def get_representation_distance_to_center(args, val_loader, layer, arch='resnet_
                 model.layer3[layer - layers[0] - layers[1] - 1].bn1.register_forward_hook(hook)
             elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
                 model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
-        elif args.arch == "deepmir_resnet_cw":
+        elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
             for whitened_layer in layer:
                 if int(whitened_layer) == 1:
                     model.bn1.register_forward_hook(hook)
@@ -460,7 +460,7 @@ def intra_concept_dot_product_vs_inter_concept_dot_product(args, conceptdir, lay
                     model.layer3[layer - layers[0] - layers[1] - 1].bn1.register_forward_hook(hook)
                 elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
                     model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
-            elif args.arch == "deepmir_resnet_cw":
+            elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
                 if int(layer) == 1:
                     model.bn1.register_forward_hook(hook)
                 elif int(layer) == 2:
@@ -1044,7 +1044,7 @@ def plot_concept_representation(args, val_loader, model, whitened_layers, plot_c
                     model.layer3[layer - layers[0] - layers[1] - 1].bn1.register_forward_hook(hook)
                 elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
                     model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
-        elif args.arch == "deepmir_resnet_cw":
+        elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
             for whitened_layer in layer_list:
                 if int(whitened_layer) == 1:
                     model.bn1.register_forward_hook(hook)
@@ -1164,7 +1164,7 @@ def plot_correlation(args, val_loader, model, layer):
                 model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
         elif args.arch == "deepmir_cw_bn":
             model.features[layer - 1].register_forward_hook(hook)
-        elif args.arch == "deepmir_resnet_cw":
+        elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
             if layer == 1:
                 model.bn1.register_forward_hook(hook)
             elif layer == 2:
@@ -1229,7 +1229,6 @@ def plot_correlation_BN(args, val_loader, model, layer):
                 model.bn3.register_forward_hook(hook)
 
         for i, (input_tensor, _, path) in enumerate(val_loader):
-            # input_var = torch.autograd.Variable(input).cuda()
             input_var = torch.autograd.Variable(input_tensor)
             model(input_var)
             if i == 50:
@@ -1305,7 +1304,7 @@ def concept_permutation_importance(args, val_loader, layer, criterion, arch='res
                     model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
             elif args.arch == "deepmir_cw_bn":
                 model.features[layer - 1].register_forward_hook(hook)
-            elif args.arch == "deepmir_resnet_cw":
+            elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
                 if int(layer) == 1:
                     model.bn1.register_forward_hook(hook)
                 elif int(layer) == 2:
@@ -1314,8 +1313,6 @@ def concept_permutation_importance(args, val_loader, layer, criterion, arch='res
                     model.bn3.register_forward_hook(hook)
 
             for i, (input, target) in enumerate(val_loader):
-                # input_var = torch.autograd.Variable(input).cuda()
-                # target_var = torch.autograd.Variable(target).cuda()
                 input_var = torch.autograd.Variable(input)
                 target_var = torch.autograd.Variable(target)
 
@@ -1337,8 +1334,7 @@ def concept_permutation_importance(args, val_loader, layer, criterion, arch='res
     print(base_accuracy)
 
 
-def concept_gradient_importance(args, val_loader, layer, arch='resnet_cw', dataset='isic', num_classes=2,
-                                model=None):
+def concept_gradient_importance(args, val_loader, layer, arch='resnet_cw', num_classes=2, model=None):
     # model.eval()
     model = model.module
 
@@ -1349,8 +1345,6 @@ def concept_gradient_importance(args, val_loader, layer, arch='resnet_cw', datas
     outputs = []
 
     def hook(module, grad_input, grad_output):
-        print(grad_input[0].shape, 'plot func grad input')
-        print(grad_output[0].shape, 'plot func grad output')
         outputs.append(grad_input[0])
 
     layer = int(layer)
@@ -1379,12 +1373,6 @@ def concept_gradient_importance(args, val_loader, layer, arch='resnet_cw', datas
             model.relu6.register_backward_hook(hook)
         elif layer == 3:
             model.relu9.register_backward_hook(hook)
-        # if layer == 1:
-        #     model.bn1.register_forward_hook(hook)
-        # elif layer == 2:
-        #     model.bn2.register_forward_hook(hook)
-        # elif layer == 3:
-        #     model.bn3.register_forward_hook(hook)
 
     class_count = [0] * num_classes
     concept_importance_per_class = [None] * num_classes
@@ -1630,7 +1618,7 @@ def saliency_map_concept_cover_2(args, val_loader, layer, arch='resnet_cw', data
             model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
     elif args.arch == "deepmir_cw_bn":
         model.features[layer - 1].register_forward_hook(hook)
-    elif args.arch == "deepmir_resnet_cw":
+    elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
         if int(layer) == 1:
             model.bn1.register_forward_hook(hook)
         elif int(layer) == 2:
@@ -1647,25 +1635,25 @@ def saliency_map_concept_cover_2(args, val_loader, layer, arch='resnet_cw', data
 
     cover_size = 12
     with torch.no_grad():
-        for i, (input_img, target) in enumerate(val_loader):
+        for i, (input, target) in enumerate(val_loader):
             random_patch = torch.tensor(np.random.normal(size=(3, cover_size, cover_size)))
-            input_var = torch.autograd.Variable(input_img)
+            input_var = torch.autograd.Variable(input)
             output = model(input_var)
-            base_activations = F.max_pool2d(outputs[0], kernel_size=3, stride=3)
+            base_activations = F.max_pool2d(outputs[0], kernel_size=2, stride=1)
             base_activations = base_activations[0, :, :, :].clamp(min=0.0).mean(dim=(1, 2))
             outputs = []
 
-            input_size = input_img.size()
+            input_size = input.size()
             saliency = np.zeros((1, input_size[2], input_size[3]))
             counter = np.zeros((input_size[2], input_size[3])) + 0.00001
             for p in range(0, input_size[2] - cover_size + 1, 5):
                 print("p={}\n".format(p))
                 for q in range(0, input_size[3] - cover_size + 1, 5):
-                    new_input = input_img.clone()
+                    new_input = input.clone()
                     new_input[0, :, p:p + cover_size, q:q + cover_size] = random_patch
-                    input_var = torch.autograd.Variable(input_img)
+                    input_var = torch.autograd.Variable(new_input)
                     output = model(input_var)
-                    new_activations = F.max_pool2d(outputs[0], kernel_size=3, stride=3)
+                    new_activations = F.max_pool2d(outputs[0], kernel_size=2, stride=1)
                     new_activations = new_activations[0, :, :, :].clamp(min=0.0).mean(dim=(1, 2))
                     # new_activations = outputs[0][0,:,:,:].clamp(min=0.0).max(dim=(1,2))
                     outputs = []
@@ -1673,9 +1661,7 @@ def saliency_map_concept_cover_2(args, val_loader, layer, arch='resnet_cw', data
                     for j in range(num_concepts, num_concepts + 1):
                         saliency[0, p:p + cover_size, q:q + cover_size] += decrease_in_activations[j].cpu().numpy()
                     counter[p:p + cover_size, q:q + cover_size] += 1.0
-
             saliency = saliency / counter
-            # print(saliency)
 
             u_limit = np.percentile(saliency, 99.99)
             l_limit = np.percentile(saliency, 0.01)
@@ -1686,13 +1672,14 @@ def saliency_map_concept_cover_2(args, val_loader, layer, arch='resnet_cw', data
             saliency[saliency < lower_limit] = 0.3
             saliency[saliency >= lower_limit] = 1.0
 
-            input_image = input_img[0, :, :, :].permute(1, 2, 0).cpu().numpy()
+            input_image = input[0, :, :, :].permute(1, 2, 0).cpu().numpy()
 
             for j in range(num_concepts, num_concepts + 1):
                 save_folder = os.path.join(dst, "concept_" + str(j))
                 image = Image.fromarray(np.uint8(input_image * 255)).convert('RGBA')
                 image = np.array(image)
-                print(saliency)
+                print('image', image)
+                print('saliency', saliency)
                 image[:, :, 3] = (saliency[0, :, :] * 255).astype(np.uint8)
                 image = Image.fromarray(image)
                 image.save(os.path.join(save_folder, str(i) + '.png'), 'PNG')
@@ -1878,8 +1865,8 @@ def load_deepmir_resnet_cw_v2_model(args, checkpoint_folder="./checkpoints", whi
     if whitened_layer is None:
         raise Exception("whitened_layer argument is required")
     else:
-        arch = './checkpoints/presence_terminal_loop/DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER_1_checkpoint.pth.tar'
-        model = DeepMirResNetTransferv2(args, model_file=arch)
+        arch = './checkpoints/resnet_deepmir_v2/DEEPMIR_RESNET_PREMIRNA_v2_BN_1_checkpoint.pth.tar'
+        model = DeepMirResNetTransferv2(args, [int(whitened_layer)], model_file=arch)
         checkpoint_name = '{}_{}_model_best.pth.tar'.format(prefix_name, whitened_layer)
 
     model = torch.nn.DataParallel(model)

@@ -201,6 +201,7 @@ class DeepMirResNetTransfer(nn.Module):
 
         super(DeepMirResNetTransfer, self).__init__()
         self.model = DeepMirResNet()
+        print(model_file)
         if model_file is not None:
             if not os.path.exists(model_file):
                 raise Exception("checkpoint {} not found!".format(model_file))
@@ -263,10 +264,8 @@ class DeepMirResNetTransferv2(nn.Module):
             if not os.path.exists(model_file):
                 raise Exception("checkpoint {} not found!".format(model_file))
             checkpoint = torch.load(model_file, map_location='cpu')
-            print(checkpoint['state_dict'].keys())
             args.start_epoch = checkpoint['epoch']
             args.best_prec1 = checkpoint['best_prec1']
-            # if using my own pretrained resnet model, use this below
             state_dict = {str.replace(k, 'module.model.', ''): v for k, v in checkpoint['state_dict'].items()}
             state_dict = {str.replace(k, 'bw', 'bn'): v for k, v in state_dict.items()}
 
@@ -682,18 +681,18 @@ class DeepMirResNetBNv2(nn.Module):
 
             state_dict = {str.replace(k, 'bw', 'bn'): v for k, v in state_dict.items()}
 
-            # randomly initialize bn mean and var
-            # TODO: pretrain again to get running mean and running var
-            bn1 = torch.empty(48)
-            bn2 = torch.empty(60)
-            bn3 = torch.empty(72)
-            print(bn1.shape, bn2.shape, bn3.shape)
-            state_dict['bn1.running_mean'] = nn.init.zeros_(bn1)
-            state_dict['bn1.running_var'] = nn.init.zeros_(bn1)
-            state_dict['bn2.running_mean'] = nn.init.zeros_(bn2)
-            state_dict['bn2.running_var'] = nn.init.zeros_(bn2)
-            state_dict['bn3.running_mean'] = nn.init.zeros_(bn3)
-            state_dict['bn3.running_var'] = nn.init.zeros_(bn3)
+            # # randomly initialize bn mean and var
+            # # TODO: pretrain again to get running mean and running var
+            # bn1 = torch.empty(48)
+            # bn2 = torch.empty(60)
+            # bn3 = torch.empty(72)
+            # print(bn1.shape, bn2.shape, bn3.shape)
+            # state_dict['bn1.running_mean'] = nn.init.zeros_(bn1)
+            # state_dict['bn1.running_var'] = nn.init.zeros_(bn1)
+            # state_dict['bn2.running_mean'] = nn.init.zeros_(bn2)
+            # state_dict['bn2.running_var'] = nn.init.zeros_(bn2)
+            # state_dict['bn3.running_mean'] = nn.init.zeros_(bn3)
+            # state_dict['bn3.running_var'] = nn.init.zeros_(bn3)
             self.model.load_state_dict(state_dict)
 
     def forward(self, x):

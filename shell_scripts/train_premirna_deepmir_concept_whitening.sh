@@ -4,7 +4,6 @@ python train_premirna.py --workers 0 --arch deepmir_cw_bn --epochs 1 --batch-siz
 # training script
 python train_premirna.py --workers 0 --arch deepmir_cw_bn --epochs 1 --batch-size 64 --lr 0.1 --whitened_layers 6 --concepts presence_terminal_loop  --prefix DEEPMIR_PREMIRNA_CPT_WHITEN_TRANSFER modhsa_original/
 
-# seems as if 0.05 is too high for our example, many times overfitting
 
 # evaluation script
 python train_premirna.py --workers 0 --arch deepmir_cw_bn --epochs 100 --batch-size 64 --lr 0.001 --whitened_layers 6 --concepts presence_terminal_loop --prefix DEEPMIR_PREMIRNA_CPT_WHITEN_TRANSFER --resume ./checkpoints/DEEPMIR_PREMIRNA_CPT_WHITEN_TRANSFER_model_best.pth.tar modhsa_original/ --evaluate
@@ -92,16 +91,21 @@ python train_premirna.py --workers 0 --arch deepmir_resnet_cw --epochs 1 --batch
 
 
 
-# resnetdeepmir with extra relu's to get permutation function working
-python train_premirna.py --workers 0 --arch deepmir_resnet_bn_v2 --epochs 40 --batch-size 128 --lr 0.001 --whitened_layers 1 --concepts presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_BN  modhsa_original/
-# cw in this model
-python train_premirna.py --workers 0 --arch deepmir_resnet_cw_v2 --epochs 1 --batch-size 64 --lr 0.001 --whitened_layers 1 --concepts presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER modhsa_original/
-python train_premirna.py --workers 0 --arch deepmir_resnet_cw_v2 --epochs 1 --batch-size 64 --lr 0.001 --whitened_layers 2 --concepts presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER modhsa_original/
-python train_premirna.py --workers 0 --arch deepmir_resnet_cw_v2 --epochs 1 --batch-size 64 --lr 0.1 --whitened_layers 3 --concepts presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER modhsa_original/
+# Resnet-deepmir with extra relu's to get permutation function working
+# pretrain
+python train_premirna.py --workers 0 --arch deepmir_resnet_bn_v2 --epochs 40 --batch-size 128 --lr 0.001 --whitened_layers 1 --concepts presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_BN  preparation/datasets/nonhsa_modmirbase_pretraininCWcode/
+# finetune
+python train_premirna.py --workers 0 --arch deepmir_resnet_bn_v2 --epochs 100 --batch-size 128 --lr 0.001 --whitened_layers 1 --concepts presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_BN  modhsa_original/
+# cw
+python train_premirna.py --workers 0 --arch deepmir_resnet_cw_v2 --epochs 2 --batch-size 64 --lr 0.1 --whitened_layers 1 --concepts base_beginstem_4nt_clean,presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER modhsa_original/
+python train_premirna.py --workers 0 --arch deepmir_resnet_cw_v2 --epochs 1 --batch-size 64 --lr 0.1 --whitened_layers 2 --concepts base_beginstem_4nt_clean,presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER modhsa_original/
+python train_premirna.py --workers 0 --arch deepmir_resnet_cw_v2 --epochs 1 --batch-size 64 --lr 0.1 --whitened_layers 3 --concepts base_beginstem_4nt_clean,presence_terminal_loop  --prefix DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER modhsa_original/
+python train_premirna.py --workers 0 --arch deepmir_resnet_cw_v2 --epochs 5 --batch-size 64 --lr 0.1 --whitened_layers 1,2,3 --concepts base_beginstem_4nt_clean,presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER modhsa_original/
+# evaluation
+python train_premirna.py --workers 0 --arch deepmir_resnet_cw_v2 --epochs 1 --batch-size 64 --lr 0.1 --whitened_layers 1 --concepts base_beginstem_4nt_clean,presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER --resume ./checkpoints/base_beginstem_4nt_clean_presence_terminal_loop/DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER_1_checkpoint.pth.tar modhsa_original/ --evaluate
+python train_premirna.py --workers 0 --arch deepmir_resnet_cw_v2 --epochs 1 --batch-size 64 --lr 0.1 --whitened_layers 2 --concepts base_beginstem_4nt_clean,presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER --resume ./checkpoints/base_beginstem_4nt_clean_presence_terminal_loop/DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER_2_checkpoint.pth.tar modhsa_original/ --evaluate
+python train_premirna.py --workers 0 --arch deepmir_resnet_cw_v2 --epochs 1 --batch-size 64 --lr 0.1 --whitened_layers 3 --concepts base_beginstem_4nt_clean,presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER --resume ./checkpoints/base_beginstem_4nt_clean_presence_terminal_loop/DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER_3_checkpoint.pth.tar modhsa_original/ --evaluate
+python train_premirna.py --workers 0 --arch deepmir_resnet_cw_v2 --epochs 1 --batch-size 64 --lr 0.1 --whitened_layers 1,2,3 --concepts base_beginstem_4nt_clean,presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER --resume ./checkpoints/base_beginstem_4nt_clean_presence_terminal_loop/DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER_1_2_3_checkpoint.pth.tar modhsa_original/ --evaluate
 
-# eval on this model
-python train_premirna.py --workers 0 --arch deepmir_resnet_cw_v2 --epochs 1 --batch-size 64 --lr 0.001 --whitened_layers 1 --concepts presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER --resume ./checkpoints/presence_terminal_loop/DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER_1_checkpoint.pth.tar modhsa_original/ --evaluate
-python train_premirna.py --workers 0 --arch deepmir_resnet_cw_v2 --epochs 1 --batch-size 64 --lr 0.001 --whitened_layers 2 --concepts presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER --resume ./checkpoints/presence_terminal_loop/DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER_2_checkpoint.pth.tar modhsa_original/ --evaluate
-python train_premirna.py --workers 0 --arch deepmir_resnet_cw_v2 --epochs 1 --batch-size 64 --lr 0.1 --whitened_layers 3 --concepts presence_terminal_loop --prefix DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER --resume ./checkpoints/presence_terminal_loop/DEEPMIR_RESNET_PREMIRNA_v2_CPT_WHITEN_TRANSFER_3_checkpoint.pth.tar modhsa_original/ --evaluate
 
 

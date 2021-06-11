@@ -96,10 +96,12 @@ def main():
                                                                            '/DEEPMIR_RESNET_PREMIRNA_PRETRAIN_'
                                                                            'checkpoint.pth.tar')
     elif args.arch == 'deepmir_resnet_bn_v2':
-        model = DeepMirResNetBNv2(args, arch='deepmir_resnet_bn_v2', model_file=None)
+        model = DeepMirResNetBNv2(args, arch='deepmir_resnet_bn_v2', model_file='checkpoints/resnet_deepmir_v2/'
+                                                                                'DEEPMIR_RESNET_PREMIRNA_v2_pretrain_BN_1_'
+                                                                                'checkpoint.pth.tar')
     elif args.arch == 'deepmir_resnet_cw_v2':
         model = DeepMirResNetTransferv2(args, [int(x) for x in args.whitened_layers.split(',')],
-                                        arch='deepmir_resnet_cw_v2', model_file='checkpoints/presence_terminal_loop/'
+                                        arch='deepmir_resnet_cw_v2', model_file='checkpoints/resnet_deepmir_v2/'
                                                                                 'DEEPMIR_RESNET_PREMIRNA_v2_BN_1'
                                                                                 '_checkpoint.pth.tar')
     elif args.arch == "deepmir_resnet_cw":
@@ -119,12 +121,9 @@ def main():
 
     # Data loading code
     traindir = os.path.join(args.data, 'train')
-    # valdir = os.path.join(args.data, 'val')
     testdir = os.path.join(args.data, 'test')
     conceptdir_train = os.path.join(args.data, 'concept_train')
     conceptdir_test = os.path.join(args.data, 'concept_test')
-    # normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-    #                                  std=[0.229, 0.224, 0.225])
 
     train_loader = balanced_data_loader(args, traindir)
     test_loader_2 = balanced_data_loader(args, testdir)
@@ -133,49 +132,27 @@ def main():
         torch.utils.data.DataLoader(
             datasets.ImageFolder(os.path.join(conceptdir_train, concept), transforms.Compose([
                 transforms.ToTensor(),
-                # normalize,
             ])),
             batch_size=args.batch_size, shuffle=True,
             num_workers=args.workers, pin_memory=False)
         for concept in args.concepts.split(',')
     ]
 
-    # val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
-    #     transforms.ToTensor(),
-    #     normalize, ]))
     test_dataset = datasets.ImageFolder(testdir, transforms.Compose([
         transforms.ToTensor(),
-        # normalize,
     ]))
     args.test_weights = get_class_weights(test_dataset.imgs, len(test_dataset.classes))
     print(args.test_weights)
     test_loader = torch.utils.data.DataLoader(test_dataset,
                                               batch_size=args.batch_size, shuffle=False,
                                               num_workers=args.workers, pin_memory=False)
-    # test_loader = torch.utils.data.DataLoader(
-    #     datasets.ImageFolder(testdir, transforms.Compose([
-    #         transforms.ToTensor(),
-    #         normalize,
-    #     ])),
-    #     batch_size=args.batch_size, shuffle=False,
-    #     num_workers=args.workers, pin_memory=False)
 
     test_loader_with_path = torch.utils.data.DataLoader(
         ImageFolderWithPaths(testdir, transforms.Compose([
             transforms.ToTensor(),
-            # normalize,
         ])),
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=False)
-
-    # val_loader_2 = torch.utils.data.DataLoader(
-    #     ImageFolderWithPaths(valdir,
-    #                          transforms.Compose([
-    #                              transforms.ToTensor(),
-    #                              normalize,
-    #                          ])),
-    #     batch_size=args.batch_size, shuffle=False,
-    #     num_workers=args.workers, pin_memory=False)
 
     if not args.evaluate:
         print("Start training")
@@ -220,28 +197,22 @@ def main():
                                                     whitened_layer=args.whitened_layers)
 
         # cannot invoke validation before the concept importance is calculated (bc that uses a backward pass..)
-        # print("Start testing")
-        # validate(test_loader, model, criterion)
         print("Start Plotting")
+
         if len(args.whitened_layers) > 1:
             whitened_layers = [int(x) for x in args.whitened_layers.split(',')]
             for layer in whitened_layers:
-                concept_importance_per_class = concept_gradient_importance(args, test_loader,
-                                                                           layer=layer, arch=args.arch,
-                                                                           dataset=None, num_classes=2, model=model)
-            print(concept_importance_per_class)
+                concept_gradient_importance(args, test_loader, layer, arch=args.arch, num_classes=2, model=model)
 
         else:
-            print('in this else')
-            print(model)
-            concept_importance_per_class = concept_gradient_importance(args, test_loader,
-                                                                       layer=args.whitened_layers,
-                                                                       arch=args.arch,
-                                                                       dataset=None, num_classes=2, model=model)
-            print(concept_importance_per_class)
+            concept_gradient_importance(args, test_loader, layer=args.whitened_layers, arch=args.arch, num_classes=2,
+                                        model=model)
 
-            plot_figures(args, model, test_loader_with_path, train_loader, concept_loaders, conceptdir_test, test_loader,
-                         criterion)
+        print("Start testing")
+        validate(test_loader, model, criterion)
+        plot_figures(args, model, test_loader_with_path, train_loader, concept_loaders, conceptdir_test, test_loader,
+                     criterion)
+
         # don't know what to do with the function below?
         # get_representation_distance_to_center(args, test_loader, args.whitened_layers, arch='deepmir_resnet_cw_separate_CW',
         #                                       model=model)
@@ -265,7 +236,6 @@ def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
             for concept_index, concept_loader in enumerate(concept_loaders):
                 model.module.change_mode(concept_index)
                 for j, (X, _) in enumerate(concept_loader):
-                    # X_var = torch.autograd.Variable(X).cuda()
                     X_var = torch.autograd.Variable(X)
                     model(X_var)
                     break
@@ -299,8 +269,8 @@ def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                   'Prec@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
-                epoch, i, len(train_loader), batch_time=batch_time,
-                data_time=data_time, loss=losses, top1=top1))
+                    epoch, i, len(train_loader), batch_time=batch_time,
+                    data_time=data_time, loss=losses, top1=top1))
 
 
 def validate(val_loader, model, criterion):
@@ -459,8 +429,8 @@ def train_baseline(train_loader, concept_loaders, model, criterion, optimizer, e
                   'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
                   'Prec@5 {top5.val:.3f} ({top5.avg:.3f})\t'
                   'Prec_cpt@1 {top1_cpt.val:.3f} ({top1_cpt.avg:.3f})'.format(
-                epoch, i, len(train_loader), batch_time=batch_time, data_time=data_time, loss=losses,
-                loss_a=loss_aux, top1=top1, top5=top5, top1_cpt=top1_cpt))
+                    epoch, i, len(train_loader), batch_time=batch_time, data_time=data_time, loss=losses,
+                    loss_a=loss_aux, top1=top1, top5=top5, top1_cpt=top1_cpt))
 
 
 def plot_figures(args, model, test_loader_with_path, train_loader, concept_loaders, conceptdir, test_loader_withoutpath,
@@ -473,7 +443,7 @@ def plot_figures(args, model, test_loader_with_path, train_loader, concept_loade
     if args.arch == "deepmir_resnet_bn":
         print("Plot correlation")
         plot_correlation_BN(args, test_loader_with_path, model, layer=args.whitened_layers)
-    elif args.arch == "deepmir_resnet_cw" or args.arch == "resnet_cw":
+    elif args.arch == "deepmir_resnet_cw" or args.arch == "resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
         if len(args.whitened_layers) > 1:
             whitened_layers = [int(x) for x in args.whitened_layers.split(',')]
             for layer in whitened_layers:
@@ -489,10 +459,6 @@ def plot_figures(args, model, test_loader_with_path, train_loader, concept_loade
                                                arch=args.arch, dataset=None, num_concepts=len(args.concepts.split(',')),
                                                model=model)
                 print("Plot concept importance for target classes")
-                concept_importance_per_class = concept_gradient_importance(args, test_loader_withoutpath,
-                                                                           layer, criterion, arch=args.arch,
-                                                                           dataset=None, num_classes=2, model=model)
-                print(concept_importance_per_class)
             print("Plot top50 activated images")
             # False is if you want the top50 concept images for the whitened layer and the assigned neuron,
             # otherwise you can say for which layer neuron in that layer you want the top 50
@@ -516,29 +482,23 @@ def plot_figures(args, model, test_loader_with_path, train_loader, concept_loade
                                activation_mode=args.act_mode)
             plot_top10(args, plot_cpt=args.concepts.split(','),
                        layer=args.whitened_layers)  # Need to have plot_concept_top50
-            # print("Plot 2d slice of representation")
-            # plot_concept_representation(args, test_loader_with_path, model, args.whitened_layers,
-            #                             plot_cpt=[concept_name[0], concept_name[1]], activation_mode=args.act_mode)
-            # print("Plot intra- and inter-concept similarities")
-            # intra_concept_dot_product_vs_inter_concept_dot_product(args, conceptdir, args.whitened_layers,
-            #                                                        plot_cpt=args.concepts.split(','),
-            #                                                        arch='deepmir_resnet_cw',
-            #                                                        model=model)
+            print("Plot 2d slice of representation")
+            plot_concept_representation(args, test_loader_with_path, model, args.whitened_layers,
+                                        plot_cpt=[concept_name[0], concept_name[1]], activation_mode=args.act_mode)
+            print("Plot intra- and inter-concept similarities")
+            intra_concept_dot_product_vs_inter_concept_dot_product(args, conceptdir, args.whitened_layers,
+                                                                   plot_cpt=args.concepts.split(','),
+                                                                   arch='deepmir_resnet_cw',
+                                                                   model=model)
 
             print("Plot concept importance for overall classifier")
             concept_permutation_importance(args, test_loader_withoutpath, args.whitened_layers, criterion,
                                            arch=args.arch, dataset=None, num_concepts=len(args.concepts.split(',')),
                                            model=model)
-            print("Plot concept importance for target classes")
-            concept_importance_per_class = concept_gradient_importance(args, test_loader_withoutpath,
-                                                                       args.whitened_layers,
-                                                                       criterion, arch=args.arch,
-                                                                       dataset=None, num_classes=2, model=model)
-            print(concept_importance_per_class)
 
-            #
+
             # print("Plot receptive field over most activated img")
-            # saliency_map_concept_cover_2(args, test_loader_2, args.whitened_layers, arch=args.arch,
+            # saliency_map_concept_cover_2(args, test_loader_withoutpath, args.whitened_layers, arch=args.arch,
             #                              dataset=None, num_concepts=len(args.concepts.split(',')), model=model)
 
     # print("Plot AUC-concept_purity")
