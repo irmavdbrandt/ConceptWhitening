@@ -2,7 +2,8 @@ from PIL import Image
 import os
 import numpy as np
 import pandas as pd
-from concept_detection import loop_concepts, ugu_motif, base_pairs_stem, bulges, palindrome, AU_pairs_begin_maturemiRNA
+from preparation.concept_detection import loop_concepts, ugu_motif, base_pairs_stem, bulges, palindrome, \
+    AU_pairs_begin_maturemiRNA, large_asymmetric_bulge
 import tensorflow as tf
 
 # STEP 1: collect the data and concept annotations
@@ -34,13 +35,14 @@ for dirname, _, filenames in os.walk('modhsa_original/'):
             # generate all the concept information
             base_pairs, stem_begin = base_pairs_stem(data)
             terminal_loop, loop_start_row, loop_start_pixel, loop_highest_row, loop_highest_pixel, loop_length, \
-            loop_width = loop_concepts(data, base_pairs)
+            loop_width, round_loop, width_gap_start = loop_concepts(data, base_pairs)
             ugu_combined = ugu_motif(data, terminal_loop, loop_highest_pixel, loop_start_pixel)
             symmetric_bulges, asymmetric_bulges, symmetric_bulge_info, asymmetric_bulge_info = bulges(data, base_pairs,
                                                                                                       loop_start_pixel,
                                                                                                       stem_begin)
             palindrome_score, palindrome_loop = palindrome(data, loop_start_pixel)
             au_pair = AU_pairs_begin_maturemiRNA(base_pairs)
+            asymmetry = large_asymmetric_bulge(data, loop_start_pixel)
             # start adding the concept information to the entry of the dataframe
             entry['presence_terminal_loop'] = terminal_loop
             entry['start_loop_upperhalf_row'] = loop_start_row
@@ -49,7 +51,10 @@ for dirname, _, filenames in os.walk('modhsa_original/'):
             entry['highest_point_loop_upperhalf_col'] = loop_highest_pixel
             entry['loop_length'] = loop_length
             entry['loop_width'] = loop_width
+            entry['round_loop'] = round_loop
             entry['stem_begin'] = stem_begin
+            entry['width_gap_start'] = width_gap_start
+            entry['asymmetric'] = asymmetry
             # check the class label, if 0, start adding information on the bulges to the class0 list
             if (dirname[22:23] == '0') or (dirname[21:22] == '0'):
                 # in case the length of the asymmetric bulge list is >= 1, there is at least 1 asymmetric bulge present
@@ -62,9 +67,26 @@ for dirname, _, filenames in os.walk('modhsa_original/'):
                                                                ('height', asymmetric_bulge_info[i][4]),
                                                                ('width_height', str(asymmetric_bulge_info[i][3]) + '_'
                                                                 + str(asymmetric_bulge_info[i][4]))])
+                        if (asymmetric_bulge_info[i][4] > loop_length) or (asymmetric_bulge_info[i][4] == loop_length):
+                            if (asymmetric_bulge_info[i][3] > loop_width) or (
+                                    asymmetric_bulge_info[i][3] == loop_width):
+                                entry['large_asymmetric_bulge'] = 'True'
+                            else:
+                                # only if the width is not like above, give the high value
+                                entry['high_asymmetric_bulge'] = 'True'
+
+                        if (asymmetric_bulge_info[i][3] > loop_width) or (asymmetric_bulge_info[i][3] == loop_width):
+                            if (asymmetric_bulge_info[i][4] > loop_length) or \
+                                    (asymmetric_bulge_info[i][4] == loop_length):
+                                entry['large_asymmetric_bulge'] = 'True'
+                            else:
+                                entry['wide_asymmetric_bulge'] = 'True'
                 else:
                     # in case the length of the asymmetric bulge list is 0, there is no asymmetric bulge present
                     entry['asymmetric_bulge_presence'] = False
+                    entry['high_asymmetric_bulge'] = np.nan
+                    entry['wide_asymmetric_bulge'] = np.nan
+                    entry['large_asymmetric_bulge'] = np.nan
                 # in case the length of the symmetric bulge list is >= 1, there is at least 1 symmetric bulge present
                 if len(symmetric_bulge_info) >= 1:
                     entry['symmetric_bulge_presence'] = True
@@ -88,10 +110,27 @@ for dirname, _, filenames in os.walk('modhsa_original/'):
                                                                ('height', asymmetric_bulge_info[i][4]),
                                                                ('width_height', str(asymmetric_bulge_info[i][3])
                                                                 + '_' + str(asymmetric_bulge_info[i][4]))])
+                        if (asymmetric_bulge_info[i][4] > loop_length) or (asymmetric_bulge_info[i][4] == loop_length):
+                            if (asymmetric_bulge_info[i][3] > loop_width) or (
+                                    asymmetric_bulge_info[i][3] == loop_width):
+                                entry['large_asymmetric_bulge'] = 'True'
+                            else:
+                                # only if the width is not like above, give the high value
+                                entry['high_asymmetric_bulge'] = 'True'
+
+                        if (asymmetric_bulge_info[i][3] > loop_width) or (asymmetric_bulge_info[i][3] == loop_width):
+                            if (asymmetric_bulge_info[i][4] > loop_length) or \
+                                    (asymmetric_bulge_info[i][4] == loop_length):
+                                entry['large_asymmetric_bulge'] = 'True'
+                            else:
+                                entry['wide_asymmetric_bulge'] = 'True'
                 # check the class label, if 1, start adding information on the bulges to the class1 list
                 else:
                     # in case the length of the asymmetric bulge list is 0, there is no asymmetric bulge present
                     entry['asymmetric_bulge_presence'] = False
+                    entry['high_asymmetric_bulge'] = np.nan
+                    entry['wide_asymmetric_bulge'] = np.nan
+                    entry['large_asymmetric_bulge'] = np.nan
                 # in case the length of the symmetric bulge list is >= 1, there is at least 1 symmetric bulge present
                 if len(symmetric_bulge_info) >= 1:
                     entry['symmetric_bulge_presence'] = True
@@ -111,39 +150,39 @@ for dirname, _, filenames in os.walk('modhsa_original/'):
             if np.isnan(loop_start_pixel):
                 entry['stem_end'] = 0
                 entry['stem_length'] = stem_begin
-                entry['total_width'] = stem_begin + 1
+                entry['total_length'] = stem_begin
             else:
                 entry['stem_end'] = loop_start_pixel + 1
                 entry['stem_length'] = stem_begin - loop_width
-                entry['total_width'] = stem_begin + 1
-            if (base_pairs[0:4].count(1)) + (base_pairs[0:4].count(2)) == 4:
-                entry['base_beginstem_4nt_clean'] = True
+                entry['total_length'] = stem_begin
+            if (base_pairs[0:4].count(1) + base_pairs[0:4].count(2)) == 4:
+                entry['base_stem_1nt_4nt'] = True
             else:
-                entry['base_beginstem_4nt_clean'] = False
-            if (base_pairs[0:4].count(1)) + (base_pairs[0:4].count(2)) == 3:
-                entry['base_beginstem_4nt_1error'] = True
+                entry['base_stem_1nt_4nt'] = False
+            if (base_pairs[0:4].count(1) + base_pairs[0:4].count(2) + base_pairs[0:4].count(3)) == 4:
+                entry['base_wobble_stem_1nt_4nt'] = True
             else:
-                entry['base_beginstem_4nt_1error'] = False
-            if base_pairs[0:4].count(0) == 0:
-                entry['base_wobble_beginstem_4nt_clean'] = True
+                entry['base_wobble_stem_1nt_4nt'] = False
+            if base_pairs[0:4].count(0) != 0:
+                entry['gap_stem_1nt_4nt'] = True
             else:
-                entry['base_wobble_beginstem_4nt_clean'] = False
+                entry['gap_stem_1nt_4nt'] = False
             if (base_pairs[4:8].count(1)) + (base_pairs[4:8].count(2)) == 4:
-                entry['base_beginstem_48nt_clean'] = True
+                entry['base_stem_4nt_8nt'] = True
             else:
-                entry['base_beginstem_48nt_clean'] = False
+                entry['base_stem_4nt_8nt'] = False
             if (base_pairs[0:8].count(1)) + (base_pairs[0:8].count(2)) == 8:
-                entry['base_beginstem_8nt_clean'] = True
+                entry['base_stem_1nt_8nt'] = True
             else:
-                entry['base_beginstem_8nt_clean'] = False
-            if (base_pairs[0:8].count(1)) + (base_pairs[0:8].count(2)) == 7:
-                entry['base_beginstem_8nt_1error'] = True
+                entry['base_stem_1nt_8nt'] = False
+            if (base_pairs[0:8].count(1) + base_pairs[0:8].count(2) + base_pairs[0:8].count(3)) == 8:
+                entry['base_wobble_stem_1nt_8nt'] = True
             else:
-                entry['base_beginstem_8nt_1error'] = False
-            if base_pairs[0:8].count(0) == 0:
-                entry['base_wobble_beginstem_8nt_clean'] = True
+                entry['base_wobble_stem_1nt_8nt'] = False
+            if base_pairs[0:8].count(0) != 0:
+                entry['gap_stem_1nt_8nt'] = True
             else:
-                entry['base_wobble_beginstem_8nt_clean'] = False
+                entry['gap_stem_1nt_8nt'] = False
             base_pair_successions = 0
             for i in range(len(base_pairs) - 2):
                 if ((base_pairs[i] == 1) and (base_pairs[i + 1] == 1)) or \
@@ -160,7 +199,16 @@ for dirname, _, filenames in os.walk('modhsa_original/'):
                 entry['base_pair_successions_presence'] = False
             else:
                 entry['base_pair_successions_presence'] = True
+            if base_pair_successions > 4:
+                entry['5+_base_pair_successions'] = True
+            else:
+                entry['5+_base_pair_successions'] = False
             entry['base_pair_successions'] = base_pair_successions
+
+            # base pairing propensity: # base pairs / stem length
+            entry['base_pairs_in_stem'] = (base_pairs.count(1) + base_pairs.count(2)) / (stem_begin - loop_start_pixel)
+            entry['base_pairs_wobbles_in_stem'] = (base_pairs.count(1) + base_pairs.count(2) + base_pairs.count(3)) / \
+                                                    (stem_begin - loop_start_pixel)
 
             # UGU-motif
             # we want the first occurrence of the combined nucleotides, so the motif with the smallest pixel as starting
@@ -168,21 +216,21 @@ for dirname, _, filenames in os.walk('modhsa_original/'):
             ugu_start = 100
             for i in range(len(ugu_combined)):
                 if len(ugu_combined[i]) > 1:
-                    if ugu_combined[i][1] < ugu_start:
+                    if ugu_combined[i][0] < ugu_start:
                         entry['UGU'] = True
-                        entry['UGU_start'] = ugu_combined[i][1]
+                        entry['UGU_start'] = ugu_combined[i][0]
                         entry['UGU_end'] = ugu_combined[i][2]
-                        ugu_start = ugu_combined[i][1]
+                        ugu_start = ugu_combined[i][0]
                     else:
                         print('motif but not first')
                 else:
                     continue
-            # if after the check the UGU-related cols have not been added, there is not motif and the cols
-            # with default values should be added
-            if len(entry.columns) < 12:
-                entry['UGU'] = False
-                entry['UGU_start'] = np.nan
-                entry['UGU_end'] = np.nan
+            # # if after the check the UGU-related cols have not been added, there is not motif and the cols
+            # # with default values should be added
+            # if len(entry.columns) < 12:
+            #     entry['UGU'] = False
+            #     entry['UGU_start'] = np.nan
+            #     entry['UGU_end'] = np.nan
             tables.append(entry)
 
 # collect the data and concept information
@@ -193,7 +241,10 @@ print(data_tables['class_label'].value_counts())
 # %%
 def calculate_summary_stats(original_data, label_col, col_of_interest):
     """
-
+    :param original_data: dataframe containing concept annotations
+    :param label_col: column with class label
+    :param col_of_interest: concept column of which summary statistics are needed
+    :return: summary statistics for concept of interest per class label
     """
     data_stats = original_data[[label_col, col_of_interest]]
     data_stats = data_stats.groupby(label_col).describe().unstack(1).reset_index().pivot(index=label_col, values=0,
@@ -203,7 +254,7 @@ def calculate_summary_stats(original_data, label_col, col_of_interest):
 
 
 print("General info")
-width_stats = calculate_summary_stats(data_tables, 'class_label', 'total_width')
+length_stats = calculate_summary_stats(data_tables, 'class_label', 'total_length')
 # todo: add length, maybe a bit weird with all the asymmetric bulges..?
 stem_length_stats = calculate_summary_stats(data_tables, 'class_label', 'stem_length')
 stem_begin_stats = calculate_summary_stats(data_tables, 'class_label', 'stem_begin')
@@ -216,6 +267,8 @@ loop_stats = calculate_summary_stats(data_tables, 'class_label', 'presence_termi
 loop_length_stats = calculate_summary_stats(data_tables, 'class_label', 'loop_length')
 loop_width_stats = calculate_summary_stats(data_tables, 'class_label', 'loop_width')
 loop_structure_stats = calculate_summary_stats(data_tables, 'class_label', 'palindrome_loop')
+loop_shape_stats = calculate_summary_stats(data_tables, 'class_label', 'round_loop')
+gap_width_stats = calculate_summary_stats(data_tables, 'class_label', 'width_gap_start')
 
 print("---------------")
 print("---------------")
@@ -224,20 +277,24 @@ print("Motif info")
 UGU_stats = calculate_summary_stats(data_tables, 'class_label', 'UGU')
 AU_pair_stats = calculate_summary_stats(data_tables, 'class_label', 'AU_pair_begin_maturemiRNA')
 palindrome_stats = calculate_summary_stats(data_tables, 'class_label', 'palindrome_True')
+asymmetric_premirna_stats = calculate_summary_stats(data_tables, 'class_label', 'asymmetric')
 
 print("---------------")
 print("---------------")
 print("---------------")
 print("Base pairing info")
+base_pairs_prop_stem_stats = calculate_summary_stats(data_tables, 'class_label', 'base_pairs_in_stem')
+base_pairs_wobbles_prop_stem_stats = calculate_summary_stats(data_tables, 'class_label', 'base_pairs_wobbles_in_stem')
 base_pair_succ_pres_stats = calculate_summary_stats(data_tables, 'class_label', 'base_pair_successions_presence')
+base_5more_pair_succ_pres_stats = calculate_summary_stats(data_tables, 'class_label', '5+_base_pair_successions')
 base_pair_succ_data = calculate_summary_stats(data_tables, 'class_label', 'base_pair_successions')
-clean_4nt_base_stats = calculate_summary_stats(data_tables, 'class_label', 'base_beginstem_4nt_clean')
-error_4nt_base_stats = calculate_summary_stats(data_tables, 'class_label', 'base_beginstem_4nt_1error')
-base_wobble_4nt_stats = calculate_summary_stats(data_tables, 'class_label', 'base_wobble_beginstem_4nt_clean')
-base_48nt_stats = calculate_summary_stats(data_tables, 'class_label', 'base_beginstem_48nt_clean')
-clean_8nt_base_stats = calculate_summary_stats(data_tables, 'class_label', 'base_beginstem_8nt_clean')
-error_8nt_base_stats = calculate_summary_stats(data_tables, 'class_label', 'base_beginstem_8nt_1error')
-base_wobble_8nt_stats = calculate_summary_stats(data_tables, 'class_label', 'base_wobble_beginstem_8nt_clean')
+clean_4nt_base_stats = calculate_summary_stats(data_tables, 'class_label', 'base_stem_1nt_4nt')
+error_4nt_base_stats = calculate_summary_stats(data_tables, 'class_label', 'gap_stem_1nt_4nt')
+base_wobble_4nt_stats = calculate_summary_stats(data_tables, 'class_label', 'base_wobble_stem_1nt_4nt')
+base_48nt_stats = calculate_summary_stats(data_tables, 'class_label', 'base_stem_4nt_8nt')
+clean_8nt_base_stats = calculate_summary_stats(data_tables, 'class_label', 'base_stem_1nt_8nt')
+error_8nt_base_stats = calculate_summary_stats(data_tables, 'class_label', 'gap_stem_1nt_8nt')
+base_wobble_8nt_stats = calculate_summary_stats(data_tables, 'class_label', 'base_wobble_stem_1nt_8nt')
 
 print("---------------")
 print("---------------")
@@ -279,6 +336,9 @@ print("---------------")
 print("Bulge info: asymmetric")
 asymmetric_bulge_stats = calculate_summary_stats(data_tables, 'class_label', 'asymmetric_bulge_presence')
 asymmetric_bulge_count_stats = calculate_summary_stats(data_tables, 'class_label', 'asymmetric_bulges_count')
+high_asymmetric_bulge_stats = calculate_summary_stats(data_tables, 'class_label', 'high_asymmetric_bulge')
+wide_asymmetric_bulge_stats = calculate_summary_stats(data_tables, 'class_label', 'wide_asymmetric_bulge')
+large_asymmetric_bulge_stats = calculate_summary_stats(data_tables, 'class_label', 'large_asymmetric_bulge')
 
 widths = []
 heights = []
@@ -319,9 +379,116 @@ def make_dir_if_not_exists(directory):
 
 
 # %%
-# save concept images in the subdirectories
-# first concepts that are chosen: terminal loop presence, no mismatches/gaps in 1-4nt, sequence of base pairs,
-# symmetric bulge presence, palindrome structure, AU pairs
+# # save concept images in the subdirectories
+# def save_train_concepts_img(binary_concepts_of_interest, non_binary_concepts_of_interest, dataframe):
+#     binary_target_df_names = [f"target_data_{binary_concepts_of_interest[i]}" for i in
+#                               range(len(binary_concepts_of_interest))]
+#     non_binary_target_df_names = [f"target_data_{non_binary_concepts_of_interest[i][0]}" for i in
+#                                   range(len(non_binary_concepts_of_interest))]
+#     target_df_names = binary_target_df_names + non_binary_target_df_names
+#
+#     targets = {}
+#     for i in range(len(binary_concepts_of_interest)):
+#         target_df = dataframe.loc[(dataframe[binary_concepts_of_interest[i]] == True) |
+#                                   (dataframe[binary_concepts_of_interest[i]] == 'True')]
+#         targets[target_df_names[i]] = target_df
+#
+#         print(len(target_df), binary_concepts_of_interest[i])
+#
+#     for i in range(len(non_binary_concepts_of_interest)):
+#         target_df = dataframe.loc[dataframe[non_binary_concepts_of_interest[i][0]] >= non_binary_concepts_of_interest[i][1]]
+#         targets[target_df_names[i + len(binary_concepts_of_interest)]] = target_df
+#
+#         print(len(target_df), non_binary_concepts_of_interest[i][0])
+#
+#     # order the range in targets and target_df_names based on the length of the target dfs (small to large)
+#     targets = {k: v for k, v in sorted(targets.items(), key=lambda item: len(item[1]))}
+#
+#     # then take out 80 of the smallest target_df, save those 80 as concepts and their paths in a list
+#     # these paths should then be removed from the other target_dfs
+#
+#
+#     # subset the dataframes such that they are mutually exclusive
+#     shared_img = []
+#     new_targets = {}
+#     for key, value in targets.items():
+#         if len(shared_img) > 0:
+#             value_noshared = value[~value['path'].isin(shared_img)]
+#             new_target = value_noshared.sample(n=80, random_state=2)
+#             shared_img.append(new_target['path'])
+#             new_targets[key] = new_target
+#         else:
+#             new_target = value.sample(n=80, random_state=2)
+#             shared_img.extend(new_target['path'])
+#             new_targets[key] = new_target
+#
+#     for key, value in new_targets.items():
+#         for index, row in value.iterrows():
+#             image_path = row['path']
+#             img = Image.open(image_path)
+#             img_name = image_path[16::]
+#             img_name = img_name.replace("/", "__")  # replace / to prevent confusion when reading the path
+#             name = key[12:]
+#             make_dir_if_not_exists(
+#                 f'./modhsa_original/concept_train/{name}/{name}')
+#             img.save(
+#                 f'./modhsa_original/concept_train/{name}/{name}/{img_name}', 'PNG')
+#
+#
+# def save_test_concepts_img(binary_concepts_of_interest, non_binary_concepts_of_interest, dataframe):
+#     binary_target_df_names = [f"target_data_{binary_concepts_of_interest[i]}" for i in
+#                               range(len(binary_concepts_of_interest))]
+#     non_binary_target_df_names = [f"target_data_{non_binary_concepts_of_interest[i][0]}" for i in
+#                                   range(len(non_binary_concepts_of_interest))]
+#     target_df_names = binary_target_df_names + non_binary_target_df_names
+#
+#     targets = {}
+#     for i in range(len(binary_concepts_of_interest)):
+#         target_df = dataframe.loc[(dataframe[binary_concepts_of_interest[i]] == True) |
+#                                   (dataframe[binary_concepts_of_interest[i]] == 'True')]
+#         targets[target_df_names[i]] = target_df
+#
+#         print(len(target_df), binary_concepts_of_interest[i])
+#
+#     for i in range(len(non_binary_concepts_of_interest)):
+#         target_df = dataframe.loc[
+#             dataframe[non_binary_concepts_of_interest[i][0]] >= non_binary_concepts_of_interest[i][1]]
+#         targets[target_df_names[i + len(binary_concepts_of_interest)]] = target_df
+#
+#         print(len(target_df), non_binary_concepts_of_interest[i][0])
+#
+#     # order the range in targets and target_df_names based on the length of the target dfs (small to large)
+#     targets = {k: v for k, v in sorted(targets.items(), key=lambda item: len(item[1]))}
+#
+#     # then take out 80 of the smallest target_df, save those 80 as concepts and their paths in a list
+#     # these paths should then be removed from the other target_dfs
+#
+#     # subset the dataframes such that they are mutually exclusive
+#     shared_img = []
+#     new_targets = {}
+#     for key, value in targets.items():
+#         if len(shared_img) > 0:
+#             value_noshared = value[~value['path'].isin(shared_img)]
+#             new_target = value_noshared.sample(n=80, random_state=2)
+#             shared_img.append(new_target['path'])
+#             new_targets[key] = new_target
+#         else:
+#             new_target = value.sample(n=80, random_state=2)
+#             shared_img.extend(new_target['path'])
+#             new_targets[key] = new_target
+#
+#     for key, value in new_targets.items():
+#         for index, row in value.iterrows():
+#             image_path = row['path']
+#             img = Image.open(image_path)
+#             img_name = image_path[16::]
+#             img_name = img_name.replace("/", "__")  # replace / to prevent confusion when reading the path
+#             name = key[12:]
+#             make_dir_if_not_exists(
+#                 f'./modhsa_original/concept_test/{name}')
+#             img.save(
+#                 f'./modhsa_original/concept_test/{name}/{img_name}', 'PNG')
+
 
 def save_train_concepts_img(binary_concepts_of_interest, non_binary_concepts_of_interest, dataframe):
     for i in range(len(binary_concepts_of_interest)):
@@ -386,15 +553,7 @@ def save_test_concepts_img(binary_concepts_of_interest, non_binary_concepts_of_i
             make_dir_if_not_exists(f'./modhsa_original/concept_test/{non_binary_concepts_of_interest[i][0]}')
             img.save(f'./modhsa_original/concept_test/{non_binary_concepts_of_interest[i][0]}/{img_name}', 'PNG')
 
-
-binary_concepts_of_interest_train = ['presence_terminal_loop', 'AU_pair_begin_maturemiRNA',
-                                     'base_beginstem_4nt_clean']
-non_binary_concepts_of_interest_train = [('palindrome_True', 0.85)]  # for now, take the mean of the true class as
-# threshold
-save_train_concepts_img(binary_concepts_of_interest_train, non_binary_concepts_of_interest_train, train_data_tables)
-
-binary_concepts_of_interest_test = ['presence_terminal_loop', 'AU_pair_begin_maturemiRNA',
-                                    'base_beginstem_4nt_clean']
-non_binary_concepts_of_interest_test = [('palindrome_True', 0.85)]  # for now, take the mean of the true class as
-# threshold
-save_test_concepts_img(binary_concepts_of_interest_test, non_binary_concepts_of_interest_test, test_data_tables)
+binary_concepts_of_interest = ['presence_terminal_loop', 'asymmetric']
+non_binary_concepts_of_interest = [('width_gap_start', 6), ('base_pairs_wobbles_in_stem', 0.75)]
+save_train_concepts_img(binary_concepts_of_interest, non_binary_concepts_of_interest, train_data_tables)
+save_test_concepts_img(binary_concepts_of_interest, non_binary_concepts_of_interest, test_data_tables)

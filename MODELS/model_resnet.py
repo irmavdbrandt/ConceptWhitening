@@ -680,21 +680,7 @@ class DeepMirResNetBNv2(nn.Module):
             state_dict = {str.replace(k, 'module.model.', ''): v for k, v in checkpoint['state_dict'].items()}
 
             state_dict = {str.replace(k, 'bw', 'bn'): v for k, v in state_dict.items()}
-
-            # # randomly initialize bn mean and var
-            # # TODO: pretrain again to get running mean and running var
-            # bn1 = torch.empty(48)
-            # bn2 = torch.empty(60)
-            # bn3 = torch.empty(72)
-            # print(bn1.shape, bn2.shape, bn3.shape)
-            # state_dict['bn1.running_mean'] = nn.init.zeros_(bn1)
-            # state_dict['bn1.running_var'] = nn.init.zeros_(bn1)
-            # state_dict['bn2.running_mean'] = nn.init.zeros_(bn2)
-            # state_dict['bn2.running_var'] = nn.init.zeros_(bn2)
-            # state_dict['bn3.running_mean'] = nn.init.zeros_(bn3)
-            # state_dict['bn3.running_var'] = nn.init.zeros_(bn3)
             self.model.load_state_dict(state_dict)
 
     def forward(self, x):
         return self.model(x)
-

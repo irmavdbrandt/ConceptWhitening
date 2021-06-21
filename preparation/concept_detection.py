@@ -1,7 +1,8 @@
-#%%
+# %%
 import warnings
 import os
 import numpy as np
+import math
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 warnings.filterwarnings('ignore')
@@ -168,7 +169,7 @@ def loop_concepts(data, pairs):
                 continue
             else:
                 # the first non-zero element is the start of the stem
-                start_pixel = pair_index - 1  # loop ends at pixel that is found - 1
+                start_pixel = pair_index - 1  # - 1 since we start counting from pixel 0
                 break
 
         # go over all rows until the middle row with the starting pixel and check when the pixel color is changed from
@@ -198,8 +199,8 @@ def loop_concepts(data, pairs):
                         highest_pixel = pixel_index
                         highest_row = row_index
 
-        # width of the loop: from pixel 0 to start_pixel
-        width = start_pixel + 1  # + 1 because we are dealing with an index from 0 to 99
+        # width of the loop: from pixel 1 to start_pixel
+        width = start_pixel + 1
 
         # get the lowest point of the loop by going over all rows in the bottom half of the image and the pixel index
         # of the highest point in the loop
@@ -213,7 +214,7 @@ def loop_concepts(data, pairs):
                         and (data[row_index - 1][highest_pixel][2] == 255)):
                     print('white pixel proceeded')
                 else:
-                    lowest_row = row_index
+                    lowest_row = row_index  # note that this is the row below the lowest row
 
         # loop length: loop is symmetrical
         # Case 1: lowest point is the last row of the image and the highest point the first row of the image
@@ -229,15 +230,75 @@ def loop_concepts(data, pairs):
                 # Case 3: loop does not go all the way down and up
                 length = 25 - ((25 - lowest_row) + highest_row)
 
+        # check whether the loop shape is round (low --> high --> low) or not
+        # only need to check the heights of the bars of the upper half because the loop is symmetrical
+        bars_loop_heights = []
+        for pixel_index in range(0, start_pixel + 1):
+            bar_height = 0
+            for row_index in range(row_before_middle, -1, -1):
+                if (data[row_index][pixel_index][0] == 255) and (data[row_index][pixel_index][1] == 255) and \
+                        (data[row_index][pixel_index][2] == 255):
+                    bars_loop_heights.append(bar_height)
+                    break
+                else:
+                    # if the colored pixels go up to the first row, there is no white pixel above that any more so we
+                    # need to add the current count to the list
+                    if row_index == 0:
+                        bars_loop_heights.append(bar_height)
+                        break
+                    else:
+                        bar_height += 1
+        loop_middle = len(bars_loop_heights) / 2
+        shape_first_half = []
+        shape_second_half = []
+        if loop_middle.is_integer():
+            loop_middle = round(loop_middle)
+            loop_middle2 = loop_middle
+        else:
+            loop_middle = math.floor(loop_middle)
+            loop_middle2 = loop_middle + 1
+        for i in range(0, loop_middle):
+            if (bars_loop_heights[i] < bars_loop_heights[i + 1]) or (bars_loop_heights[i] == bars_loop_heights[i + 1]):
+                shape_first_half.append(True)
+            else:
+                shape_first_half.append(False)
+        for j in range(len(bars_loop_heights) - 1, loop_middle2 - 1, -1):
+            if (bars_loop_heights[j] == bars_loop_heights[j - 1]) or (bars_loop_heights[j] < bars_loop_heights[j - 1]):
+                shape_second_half.append(True)
+            else:
+                shape_second_half.append(False)
+
+        if all(shape_first_half) and all(shape_second_half):
+            round_shape = 'True'
+        else:
+            round_shape = 'False'
+
+        width_gap_start = np.nan
+
     else:
+        # measure how wide the gap in the beginning is (# of black pixels)
+        for row_index in range(row_before_middle, row_before_middle + 2):
+            if (data[row_index][0][0] == 0) and (data[row_index][0][1] == 0) \
+                    and (data[row_index][0][2] == 0):
+                row_gap = row_index
+        width_gap = 0
+        for pixel_index in range(0, 100):
+            if (data[row_gap][pixel_index][0] == 0) and (data[row_gap][pixel_index][1] == 0) \
+                    and (data[row_gap][pixel_index][2] == 0):
+                width_gap += 1
+            else:
+                break
+        width_gap_start = width_gap
         start_row = np.nan
         start_pixel = np.nan
         highest_row = np.nan
         highest_pixel = np.nan
         length = np.nan
         width = np.nan
+        round_shape = np.nan
 
-    return terminal_loop_present, start_row, start_pixel, highest_row, highest_pixel, length, width
+    return terminal_loop_present, start_row, start_pixel, highest_row, highest_pixel, length, width, round_shape, \
+           width_gap_start
 
 
 def ugu_motif(data, terminal_loop_present, highest_pixel, start_pixel):
@@ -252,12 +313,14 @@ def ugu_motif(data, terminal_loop_present, highest_pixel, start_pixel):
     # for the motif to be present, there needs to be a terminal loop
     if terminal_loop_present:
         # check whether the UGU-motif is either in the loop (from the highest point to the start) or just
-        # before the loop (what is just before?, for now take a range of 5 pixels (nt)) in the upper half of the image
-        # todo: check with "just before"
+        # before the loop (what is just before?, for now take a range of 4 pixels (nt) after the loop) in
+        # the upper half of the image
+        # todo: check "just before" with Jens (4 seems fair bc motif consists of 3 nt and it should be in front or in
+        # the loop
         gug_motifs = []
         ugu_motifs = []
         row_before_middle = 12
-        for pixel in range(highest_pixel, start_pixel + 5):
+        for pixel in range(highest_pixel, start_pixel + 4):
             if ((data[row_before_middle][pixel][0] == 255) and (data[row_before_middle][pixel][1] == 0) and
                     (data[row_before_middle][pixel][2] == 0)):
                 if ((data[row_before_middle][pixel + 1][0] == 0) and (data[row_before_middle][pixel + 1][1] == 255) and
@@ -272,7 +335,7 @@ def ugu_motif(data, terminal_loop_present, highest_pixel, start_pixel):
                     gug_motifs.append([0])
             else:
                 gug_motifs.append([0])
-        for pixel in range(highest_pixel, start_pixel + 5):
+        for pixel in range(highest_pixel, start_pixel + 4):
             if ((data[row_before_middle][pixel][0] == 0) and (data[row_before_middle][pixel][1] == 255) and
                     (data[row_before_middle][pixel][2] == 0)):
                 if ((data[row_before_middle][pixel + 1][0] == 255) and (data[row_before_middle][pixel + 1][1] == 0) and
@@ -392,7 +455,8 @@ def bulge_info(bulges_list, data):
 
         # add all the generated info into a list and add this list to an overview list
         bulge_info_list.append([bulge, (bulge_highest_row, bulge_highest_pixel), (bulge_highest_row_lowerhalf,
-                                bulge_highest_pixel_lowerhalf), width, length, nucleotide_pairs])
+                                                                                  bulge_highest_pixel_lowerhalf), width,
+                                length, nucleotide_pairs])
 
     return bulge_info_list
 
@@ -620,7 +684,7 @@ def bulge_info(bulges_list, data):
 #                 bulge_info.append(shape)
 #
 #     return bulge_info_list
-#
+
 
 def bulges(data, pairs, start_pixel, begin):
     """
@@ -677,6 +741,14 @@ def bulges(data, pairs, start_pixel, begin):
                 # list
                 bulge_indices_grouped.append(bulge_list)
                 bulge_list = []  # re-initialize the empty list for bulge storage
+    # special clause for if the final item in the bulge indices is a single bulge
+    if len(bulge_indices) > 1:
+        if bulge_indices[-1] != bulge_indices[-2] - 1:
+            single_bulge = [bulge_indices[-1]]
+            bulge_indices_grouped.append(single_bulge)
+    elif len(bulge_indices) == 1:
+        single_bulge = bulge_indices
+        bulge_indices_grouped.append(single_bulge)
 
     symmetric_bulges_list = []
     asymmetric_bulges_list = []
@@ -799,7 +871,6 @@ def palindrome(data, start_pixel):
     # the result is an array with [(False counts / len_premiRNA), (True counts / len_premiRNA)]
     palindrome_score = subset_counts / len_premiRNA
 
-    palindrome_score_loop = None
     if np.isnan(start_pixel):
         palindrome_score_loop = False
     else:
@@ -810,6 +881,17 @@ def palindrome(data, start_pixel):
             palindrome_score_loop = False
 
     return palindrome_score, palindrome_score_loop
+
+
+def large_asymmetric_bulge(data, start_pixel):
+    palindrome_score, palindrome_score_loop = palindrome(data, start_pixel)
+
+    if palindrome_score[0] > 0.6:
+        asymmetric = True
+    else:
+        asymmetric = False
+
+    return asymmetric
 
 
 def AU_pairs_begin_maturemiRNA(pairs):
@@ -836,3 +918,43 @@ def AU_pairs_begin_maturemiRNA(pairs):
 
     return AU_motif
 
+# %%
+# do some checking to see whether the new definitions are okay
+# positive class tests
+# image = './modhsa_original/test/1/hsa-mir-30a.png'
+# image = './modhsa_original/test/1/hsa-mir-1-1.png'
+# image = './modhsa_original/test/1/hsa-mir-1-2.png'
+# image = './modhsa_original/test/1/hsa-mir-30c-1.png'
+# image = './modhsa_original/test/1/hsa-mir-9-1.png'
+# image = './modhsa_original/test/1/hsa-mir-15b.png'
+# image = './modhsa_original/train/1/hsa-mir-6126.png'
+# image = './modhsa_original/test/1/hsa-mir-4692.png'
+#
+
+# negative class tests
+image = './modhsa_original/test/0/162.png'
+# image = './modhsa_original/test/0/19.png'
+# image = './modhsa_original/test/0/hsa1_4934.png'
+# image = './modhsa_original/test/0/1409.png'
+# image = './modhsa_original/test/0/320.png'
+# image = './modhsa_original/test/0/556.png'
+# image = './modhsa_original/test/0/709.png'
+#
+import skimage.io
+import matplotlib.pyplot as plt
+
+image = skimage.io.imread(image)
+# plt.imsave('output/image.png', image)
+plt.imshow(image)
+plt.show()
+image_array = np.array(image)
+
+base_pairs, stem_begin = base_pairs_stem(image_array)
+terminal_loop_present, start_row, start_pixel, highest_row, highest_pixel, length, width, round_shape, width_gap_start \
+    = loop_concepts(image_array, base_pairs)
+ugu_combined = ugu_motif(image_array, terminal_loop_present, highest_pixel, start_pixel)
+symmetric_bulges_list, asymmetric_bulges_list, symmetric_bulge_info_list, asymmetric_bulge_info_list = \
+    bulges(image_array, base_pairs, start_pixel, stem_begin)
+palindrome_score, palindrome_loop = palindrome(image_array, start_pixel)
+AU_pair = AU_pairs_begin_maturemiRNA(base_pairs)
+large_asymmetric_bulge(image_array, start_pixel)
