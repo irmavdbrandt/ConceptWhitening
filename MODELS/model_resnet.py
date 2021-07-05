@@ -18,7 +18,7 @@ class ResidualNetTransfer(nn.Module):
             layers = [2, 2, 2, 2]
         self.layers = layers
         self.model = models.__dict__[arch](num_classes=num_classes)
-        if model_file != None:
+        if model_file is not None:
             if not os.path.exists(model_file):
                 raise Exception("checkpoint {} not found!".format(model_file))
             checkpoint = torch.load(model_file, map_location='cpu')
@@ -86,11 +86,12 @@ class DenseNetTransfer(nn.Module):
 
         super(DenseNetTransfer, self).__init__()
         self.model = models.__dict__[arch](num_classes=num_classes)
-        if model_file != None:
+        if model_file is not None:
             checkpoint = torch.load(model_file, map_location='cpu')
             args.start_epoch = checkpoint['epoch']
             args.best_prec1 = checkpoint['best_prec1']
             import re
+
             def repl(matchobj):
                 return matchobj.group(0)[1:]
 
@@ -153,7 +154,7 @@ class VGGBNTransfer(nn.Module):
     def __init__(self, num_classes, args, whitened_layers=None, arch='vgg16_bn', model_file=None):
         super(VGGBNTransfer, self).__init__()
         self.model = models.__dict__[arch](num_classes=num_classes)
-        if model_file != None:
+        if model_file is not None:
             checkpoint = torch.load(model_file, map_location='cpu')
             args.start_epoch = checkpoint['epoch']
             args.best_prec1 = checkpoint['best_prec1']
@@ -197,11 +198,9 @@ class VGGBNTransfer(nn.Module):
 
 
 class DeepMirResNetTransfer(nn.Module):
-    def __init__(self, args, whitened_layers=None, arch='deepmir_resnet_cw', model_file=None):
-
+    def __init__(self, args, whitened_layers=None, model_file=None):
         super(DeepMirResNetTransfer, self).__init__()
         self.model = DeepMirResNet()
-        print(model_file)
         if model_file is not None:
             if not os.path.exists(model_file):
                 raise Exception("checkpoint {} not found!".format(model_file))
@@ -255,11 +254,9 @@ class DeepMirResNetTransfer(nn.Module):
 
 
 class DeepMirResNetTransferv2(nn.Module):
-    def __init__(self, args, whitened_layers=None, arch='deepmir_resnet_cw_v2', model_file=None):
-
+    def __init__(self, args, whitened_layers=None, model_file=None):
         super(DeepMirResNetTransferv2, self).__init__()
         self.model = DeepMirResNetv2()
-        print(model_file)
         if model_file is not None:
             if not os.path.exists(model_file):
                 raise Exception("checkpoint {} not found!".format(model_file))
@@ -351,11 +348,8 @@ class DeepMir(nn.Module):
 
 
 class DeepMirTransfer(nn.Module):
-    def __init__(self, args, whitened_layers=None, arch='deepmir_cw', model_file=None):
-
+    def __init__(self, args, whitened_layers=None, model_file=None):
         super(DeepMirTransfer, self).__init__()
-        # here I need to load the model architecture
-        # self.model = torch.load('checkpoints/deepmir_architecture_bn.pth')
         self.model = DeepMir()
         if model_file is not None:
             if not os.path.exists(model_file):
@@ -363,7 +357,7 @@ class DeepMirTransfer(nn.Module):
             # here I load the weights, and other stuff related to pretraining
             checkpoint = torch.load(model_file, map_location='cpu')
             args.start_epoch = checkpoint['epoch']
-            args.best_prec1 = checkpoint['best_prec1']  # best_prec1 is the acc (should be best, do not have this yet..)
+            args.best_prec1 = checkpoint['best_prec1']  # best_prec1 is the acc
             print('best accuracy from loaded model', checkpoint['best_prec1'])
             new_state_dict = {str.replace(k, 'module.model.', ''): v for k, v in checkpoint['state_dict'].items()}
             self.model.load_state_dict(new_state_dict)
@@ -403,9 +397,11 @@ class DeepMirTransfer(nn.Module):
 
 
 class ResidualNetBN(nn.Module):
-    def __init__(self, num_classes, args, arch='resnet18', layers=[2, 2, 2, 2], model_file=None):
+    def __init__(self, num_classes, args, arch='resnet18', layers=None, model_file=None):
 
         super(ResidualNetBN, self).__init__()
+        if layers is None:
+            layers = [2, 2, 2, 2]
         self.layers = layers
         self.model = models.__dict__[arch](num_classes=num_classes)
         if model_file is not None:
@@ -414,7 +410,6 @@ class ResidualNetBN(nn.Module):
             checkpoint = torch.load(model_file, map_location='cpu')
             args.start_epoch = checkpoint['epoch']
             args.best_prec1 = checkpoint['best_prec1']
-            # print(checkpoint.keys())
             print(args.best_prec1)
             # state_dict = {str.replace(k, 'module.', ''): v for k, v in checkpoint['state_dict'].items()}
             state_dict = {str.replace(k, 'module.model.', ''): v for k, v in checkpoint['state_dict'].items()}
@@ -434,6 +429,7 @@ class DenseNetBN(nn.Module):
             args.start_epoch = checkpoint['epoch']
             args.best_prec1 = checkpoint['best_prec1']
             import re
+
             def repl(matchobj):
                 return matchobj.group(0)[1:]
 
@@ -446,7 +442,7 @@ class DenseNetBN(nn.Module):
 
 
 class VGGBN(nn.Module):
-    def __init__(self, num_classes, args, arch='vgg16_bn', model_file=None):
+    def __init__(self, args, arch='vgg16_bn', model_file=None):
         super(VGGBN, self).__init__()
         self.model = models.__dict__[arch](num_classes=365)
         if model_file == 'vgg16_bn_places365.pt':
@@ -456,7 +452,7 @@ class VGGBN(nn.Module):
             d = self.model.state_dict()
             new_state_dict = {k: state_dict[k] if k in state_dict.keys() else d[k] for k in d.keys()}
             self.model.load_state_dict(new_state_dict)
-        elif model_file != None:
+        elif model_file is not None:
             checkpoint = torch.load(model_file, map_location='cpu')
             args.start_epoch = checkpoint['epoch']
             args.best_prec1 = checkpoint['best_prec1']
@@ -468,7 +464,7 @@ class VGGBN(nn.Module):
 
 
 class DeepMirBN(nn.Module):
-    def __init__(self, args, arch='deepmir_bn', model_file=None):
+    def __init__(self, args, model_file=None):
         super(DeepMirBN, self).__init__()
         self.model = DeepMir()
         # add here the pretraining weights from mirbase
@@ -498,7 +494,7 @@ def conv3x3(in_planes: int, out_planes: int, dilation: int = 1) -> nn.Conv2d:
 class DeepMirResNet(nn.Module):
     def __init__(self) -> None:
         super(DeepMirResNet, self).__init__()
-        self.conv1 = nn.Conv2d(3, 48,  kernel_size=3, stride=(1, 1))
+        self.conv1 = nn.Conv2d(3, 48, kernel_size=3, stride=(1, 1))
         self.relu1 = nn.ReLU()
         self.conv2 = conv3x3(48, 48)
         self.relu2 = nn.ReLU()
@@ -557,18 +553,11 @@ class DeepMirResNet(nn.Module):
 
 
 class DeepMirResNetBN(nn.Module):
-    def __init__(self, args, arch='deepmir_resnet_bn', model_file=None):
+    def __init__(self, args, model_file=None):
         super(DeepMirResNetBN, self).__init__()
         self.model = DeepMirResNet()
         # add here the pretraining weights from mirbase
-        if model_file == 'deepmir_pretrain.pth':
-            state_dict = torch.load(model_file, map_location='cpu')['state_dict']
-            args.start_epoch = 0
-            args.best_prec1 = 0
-            d = self.model.state_dict()
-            new_state_dict = {k: state_dict[k] if k in state_dict.keys() else d[k] for k in d.keys()}
-            self.model.load_state_dict(new_state_dict)
-        elif model_file is not None:
+        if model_file is not None:
             checkpoint = torch.load(model_file, map_location='cpu')
             args.start_epoch = checkpoint['epoch']
             args.best_prec1 = checkpoint['best_prec1']
@@ -597,7 +586,7 @@ class DeepMirResNetBN(nn.Module):
 class DeepMirResNetv2(nn.Module):
     def __init__(self) -> None:
         super(DeepMirResNetv2, self).__init__()
-        self.conv1 = nn.Conv2d(3, 48,  kernel_size=3, stride=(1, 1))
+        self.conv1 = nn.Conv2d(3, 48, kernel_size=3, stride=(1, 1))
         self.relu1 = nn.ReLU()
         self.conv2 = conv3x3(48, 48)
         self.relu2 = nn.ReLU()
@@ -662,18 +651,10 @@ class DeepMirResNetv2(nn.Module):
 
 
 class DeepMirResNetBNv2(nn.Module):
-    def __init__(self, args, arch='deepmir_resnet_bn_v2', model_file=None):
+    def __init__(self, args, model_file=None):
         super(DeepMirResNetBNv2, self).__init__()
         self.model = DeepMirResNetv2()
-        # add here the pretraining weights from mirbase
-        if model_file == 'deepmir_pretrain.pth':
-            state_dict = torch.load(model_file, map_location='cpu')['state_dict']
-            args.start_epoch = 0
-            args.best_prec1 = 0
-            d = self.model.state_dict()
-            new_state_dict = {k: state_dict[k] if k in state_dict.keys() else d[k] for k in d.keys()}
-            self.model.load_state_dict(new_state_dict)
-        elif model_file is not None:
+        if model_file is not None:
             checkpoint = torch.load(model_file, map_location='cpu')
             args.start_epoch = checkpoint['epoch']
             args.best_prec1 = checkpoint['best_prec1']

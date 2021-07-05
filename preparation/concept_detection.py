@@ -839,11 +839,34 @@ def palindrome(data, start_pixel):
     # zip the count lists and go over them to check whether the counts are equal (= symmetric structure) or not.
     # if so, add True, else, add False
     palindrome_array = []
+    bulge_array = []
     for pixel_upper, pixel_lower in zip(upper_half_counts, lower_half_counts):
         if pixel_upper == pixel_lower:
             palindrome_array.append(True)
+            bulge_array.append(0)
         else:
             palindrome_array.append(False)
+            # check for large asymmetric bulge
+            if (pixel_upper == 2 and pixel_lower == 12) or (pixel_upper == 12 and pixel_lower == 2):
+                bulge_array.append(1)
+            else:
+                bulge_array.append(0)
+
+    widths = []
+    width = 0
+    for i in range(len(bulge_array)-1):
+        if bulge_array[i] == 1:
+            width += 1
+            if bulge_array[i+1] == 0:
+                widths.append(width)
+                width = 0
+            else:
+                i += 1
+
+    if widths == []:
+        largest_bulge = np.nan
+    else:
+        largest_bulge = np.max(widths)
 
     # divide the number of Trues/Falses by the length of the pre-miRNA
     # get the index of the first occurrence of a 0-count, this is where there are only white pixels
@@ -880,11 +903,11 @@ def palindrome(data, start_pixel):
         else:
             palindrome_score_loop = False
 
-    return palindrome_score, palindrome_score_loop
+    return palindrome_score, palindrome_score_loop, largest_bulge
 
 
 def large_asymmetric_bulge(data, start_pixel):
-    palindrome_score, palindrome_score_loop = palindrome(data, start_pixel)
+    palindrome_score, palindrome_score_loop, largest_bulge = palindrome(data, start_pixel)
 
     if palindrome_score[0] > 0.6:
         asymmetric = True
@@ -921,24 +944,24 @@ def AU_pairs_begin_maturemiRNA(pairs):
 # %%
 # do some checking to see whether the new definitions are okay
 # positive class tests
-# image = './modhsa_original/test/1/hsa-mir-30a.png'
-# image = './modhsa_original/test/1/hsa-mir-1-1.png'
-# image = './modhsa_original/test/1/hsa-mir-1-2.png'
-# image = './modhsa_original/test/1/hsa-mir-30c-1.png'
-# image = './modhsa_original/test/1/hsa-mir-9-1.png'
-# image = './modhsa_original/test/1/hsa-mir-15b.png'
-# image = './modhsa_original/train/1/hsa-mir-6126.png'
-# image = './modhsa_original/test/1/hsa-mir-4692.png'
+# image = './modhsa_original/original_dataset/test/1/hsa-mir-30a.png'
+# image = './modhsa_original/original_dataset/test/1/hsa-mir-1-1.png'
+# image = './modhsa_original/original_dataset/test/1/hsa-mir-1-2.png'
+# image = './modhsa_original/original_dataset/test/1/hsa-mir-30c-1.png'
+# image = './modhsa_original/original_dataset/test/1/hsa-mir-9-1.png'
+# image = './modhsa_original/original_dataset/test/1/hsa-mir-15b.png'
+# image = './modhsa_original/original_dataset/train/1/hsa-mir-6126.png'
+# image = './modhsa_original/original_dataset/test/1/hsa-mir-4692.png'
 #
 
 # negative class tests
-image = './modhsa_original/test/0/162.png'
-# image = './modhsa_original/test/0/19.png'
-# image = './modhsa_original/test/0/hsa1_4934.png'
-# image = './modhsa_original/test/0/1409.png'
-# image = './modhsa_original/test/0/320.png'
-# image = './modhsa_original/test/0/556.png'
-# image = './modhsa_original/test/0/709.png'
+# image = './modhsa_original/original_dataset/test/0/162.png'
+# image = './modhsa_original/original_dataset/test/0/19.png'
+# image = './modhsa_original/original_dataset/test/0/hsa1_4934.png'
+# image = './modhsa_original/original_dataset/test/0/1409.png'
+image = './modhsa_original/original_dataset/test/0/320.png'
+# image = './modhsa_original/original_dataset/test/0/556.png'
+# image = './modhsa_original/original_dataset/test/0/709.png'
 #
 import skimage.io
 import matplotlib.pyplot as plt
@@ -955,6 +978,6 @@ terminal_loop_present, start_row, start_pixel, highest_row, highest_pixel, lengt
 ugu_combined = ugu_motif(image_array, terminal_loop_present, highest_pixel, start_pixel)
 symmetric_bulges_list, asymmetric_bulges_list, symmetric_bulge_info_list, asymmetric_bulge_info_list = \
     bulges(image_array, base_pairs, start_pixel, stem_begin)
-palindrome_score, palindrome_loop = palindrome(image_array, start_pixel)
+palindrome_score, palindrome_loop, largest_bulge = palindrome(image_array, start_pixel)
 AU_pair = AU_pairs_begin_maturemiRNA(base_pairs)
 large_asymmetric_bulge(image_array, start_pixel)

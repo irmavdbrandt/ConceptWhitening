@@ -5,9 +5,17 @@ import time
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
+from torch.optim import lr_scheduler
 import torch.utils.data
 from plot_functions import *
 from PIL import ImageFile
+import neptune.new as neptune
+
+run = neptune.init(project='irmavdbrandt/Interpret-rna',
+                   api_token='eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9'
+                             'hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiIyNzgwZTlkNS0zOTdjLTRiMTctOWJjZC0xOGQwMmRlMz'
+                             'E0YzMifQ==',
+                   source_files=['train_premirna.py'])
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 model_names = sorted(name for name in models.__dict__
@@ -35,6 +43,7 @@ parser.add_argument('--resume', default='', type=str, metavar='PATH', help='path
 parser.add_argument("--seed", type=int, default=1234, metavar='BS', help='input batch size for training (default: 64)')
 parser.add_argument("--prefix", type=str, required=True, metavar='PFX', help='prefix for logging & checkpoint saving')
 parser.add_argument('--evaluate', dest='evaluate', action='store_true', help='evaluation only')
+parser.add_argument('--foldn_bestmodel', type=str, default=0, help='fold number that gave best results during training')
 
 os.chdir(sys.path[0])
 
@@ -48,124 +57,285 @@ def main():
     print("args", args)
     args.prefix += '_' + '_'.join(args.whitened_layers.split(','))
 
-    # add seeds for reproducibility
-    torch.manual_seed(args.seed)
-    random.seed(args.seed)
-
-    # initialize model architecture and possibly weights
-    model = None
-    if args.arch == "resnet_cw":
-        if args.depth == 18:
-            model = ResidualNetTransfer(2, args, [int(x) for x in args.whitened_layers.split(',')], arch='resnet18',
-                                        layers=[2, 2, 2, 2],
-                                        model_file='checkpoints/resnet_premirna_checkpoints'
-                                                   '/RESNET_PREMIRNA_BN_checkpoint.pth.tar')
-    elif args.arch == "resnet_bn":
-        model = ResidualNetBN(2, args, arch='resnet18', layers=[2, 2, 2, 2],
-                              model_file='checkpoints/resnet_premirna_checkpoints/RESNET_PREMIRNA_PRETRAIN_checkpoint'
-                                         '.pth.tar')
-    elif args.arch == "deepmir_cw":
-        model = DeepMirTransfer(args, [int(x) for x in args.whitened_layers.split(',')], arch='deepmir_cw',
-                                model_file='checkpoints/deepmir_related_checkpoints/nonCW_training/deepmir_cw.pth')
-    elif args.arch == "deepmir_bn":
-        model = DeepMirBN(args, arch='deepmir_bn', model_file=None)
-    elif args.arch == "deepmir_cw_bn":
-        model = DeepMirTransfer(args, [int(x) for x in args.whitened_layers.split(',')], arch='deepmir_cw',
-                                model_file='checkpoints/deepmir_related_checkpoints/DEEPMIR_PREMIRNA_BN_checkpoint_'
-                                           'new.pth.tar')
-        # model = DeepMirTransfer(args, [int(x) for x in args.whitened_layers.split(',')], arch='deepmir_cw')
-    elif args.arch == "deepmir_resnet_bn":
-        model = DeepMirResNetBN(args, arch='deepmir_resnet_bn', model_file='checkpoints/resnet_premirna_checkpoints'
-                                                                           '/DEEPMIR_RESNET_PREMIRNA_PRETRAIN_'
-                                                                           'checkpoint.pth.tar')
-    elif args.arch == 'deepmir_resnet_bn_v2':
-        model = DeepMirResNetBNv2(args, arch='deepmir_resnet_bn_v2', model_file='checkpoints/resnet_deepmir_v2/'
-                                                                                'DEEPMIR_RESNET_PREMIRNA_v2_pretrain_BN_1_'
-                                                                                'checkpoint.pth.tar')
-    elif args.arch == 'deepmir_resnet_cw_v2':
-        model = DeepMirResNetTransferv2(args, [int(x) for x in args.whitened_layers.split(',')],
-                                        arch='deepmir_resnet_cw_v2', model_file='checkpoints/resnet_deepmir_v2/'
-                                                                                'DEEPMIR_RESNET_PREMIRNA_v2_BN_1'
-                                                                                '_checkpoint.pth.tar')
-    elif args.arch == "deepmir_resnet_cw":
-        model = DeepMirResNetTransfer(args, [int(x) for x in args.whitened_layers.split(',')], arch='deepmir_resnet_cw',
-                                      model_file='checkpoints/DEEPMIR_RESNET_PREMIRNA_BN_2_checkpoint.pth.tar')
-
-    # define loss function (criterion) and optimizer
+    # define loss function (criterion)
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-    model = torch.nn.DataParallel(model)
-    print('Model architecture: ', model)
-    print(f'Number of model parameters: {sum([p.data.nelement() for p in model.parameters()])}')
-
-    cudnn.benchmark = True
-
-    # create path links to data directories
-    traindir = os.path.join(args.data, 'train')
-    testdir = os.path.join(args.data, 'test')
-    conceptdir_train = os.path.join(args.data, 'concept_train')
-    conceptdir_test = os.path.join(args.data, 'concept_test')
-
-    # create a balanced data loader for the training set using class weights calculated on the training set
-    train_loader = balanced_data_loader(args, traindir)
-
-    # initialize the concept data loader
-    concept_loaders = [
-        torch.utils.data.DataLoader(
-            datasets.ImageFolder(os.path.join(conceptdir_train, concept), transforms.Compose([
-                transforms.ToTensor(),
-            ])),
-            batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=False)
-        for concept in args.concepts.split(',')
-    ]
-
-    # create balanced data loader for the test set using class weights calculated on the test set
-    test_dataset = datasets.ImageFolder(testdir, transforms.Compose([
-        transforms.ToTensor(),
-    ]))
-    args.test_weights = get_class_weights(test_dataset.imgs, len(test_dataset.classes))
-    print(args.test_weights)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False,
-                                              num_workers=args.workers, pin_memory=False)
-
-    # create another data loader for the test set that includes the image paths
-    test_loader_with_path = torch.utils.data.DataLoader(
-        ImageFolderWithPaths(testdir, transforms.Compose([
-            transforms.ToTensor(),
-        ])),
-        batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
 
     # training initialization
     if not args.evaluate:
-        print("Start training")
-        epoch = None
-        best_prec1 = 0   # best top-1 precision = top-1 accuracy
-        for epoch in range(args.start_epoch, args.start_epoch + args.epochs):
-            adjust_learning_rate(optimizer, epoch)
-            # train for one epoch
-            if args.arch == "resnet_cw" or args.arch == "resnet_original" or args.arch == "deepmir_cw" or \
-                    args.arch == "deepmir_cw_bn" or args.arch == "deepmir_bn" or \
-                    args.arch == "resnet_bn" or args.arch == "deepmir_resnet_bn" or args.arch == "deepmir_resnet_cw" \
-                    or args.arch == "deepmir_resnet_bn_v2" or args.arch == "deepmir_resnet_cw_v2":
-                train(train_loader, concept_loaders, model, criterion, optimizer, epoch)
-            elif args.arch == "resnet_baseline":
-                train_baseline(train_loader, concept_loaders, model, criterion, optimizer, epoch)
-            # evaluate on validation set
-            prec1 = validate(test_loader, model, criterion)
+        # if not in CW mode, we dont want 5-fold cv
+        if args.arch == "resnet_baseline" or args.arch == "deepmir_resnet_bn_v2":
+            model = None
+            if args.arch == "deepmir_resnet_bn":
+                model = DeepMirResNetBN(args, arch='deepmir_resnet_bn',
+                                        model_file='checkpoints/resnet_premirna_checkpoints'
+                                                   '/DEEPMIR_RESNET_PREMIRNA_PRETRAIN_'
+                                                   'checkpoint.pth.tar')
+            elif args.arch == 'deepmir_resnet_bn_v2':
+                model = DeepMirResNetBNv2(args, model_file='checkpoints/resnet_deepmir_v2/DEEPMIR_RESNET_PREMIRNA_v2_'
+                                                           'pretrain_BN_1_checkpoint.pth.tar')
 
-            # remember best prec-1 and save checkpoint for this model
-            is_best = prec1 > best_prec1
-            best_prec1 = max(prec1, best_prec1)
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'best_prec1': best_prec1,
-                'optimizer': optimizer.state_dict(),
-            }, is_best, args.prefix)
-        print(best_prec1)
-        validate(test_loader, model, criterion)
+            # define optimizer
+            optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum,
+                                        weight_decay=args.weight_decay)
+
+            model = torch.nn.DataParallel(model)
+            print('Model architecture: ', model)
+            print(f'Number of model parameters: {sum([p.data.nelement() for p in model.parameters()])}')
+
+            # add seeds for reproducibility
+            torch.manual_seed(args.seed)
+            np.random.seed(args.seed)
+
+            # create path links to data directories
+            traindir = os.path.join(args.data, 'train')
+            testdir = os.path.join(args.data, 'test')
+
+            # create a balanced data loader for the training set using class weights calculated on the training set
+            train_loader = balanced_data_loader(args, traindir)
+
+            # create balanced data loader for the test set using class weights calculated on the test set
+            test_loader = torch.utils.data.DataLoader(
+                datasets.ImageFolder(testdir, transforms.Compose([
+                    transforms.ToTensor(),
+                ])),
+                batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
+
+            best_prec1 = 0
+            for epoch in range(args.start_epoch, args.start_epoch + args.epochs):
+                if args.arch == "resnet_baseline" or args.arch == "deepmir_resnet_bn_v2":
+                    loss, acc = train_baseline(train_loader, model, criterion, optimizer, epoch)
+
+                # evaluate on validation set
+                val_loss, prec1 = validate_test(train_loader, model, criterion)
+
+                # Log epoch loss
+                run[f"training/loss"].log(loss)
+                # Log epoch accuracy
+                run[f"training/acc"].log(acc)
+                # Log epoch loss
+                run[f"validation/loss"].log(val_loss)
+                # Log epoch accuracy
+                run[f"validation/acc"].log(prec1)
+
+                # remember best prec-1 and save checkpoint for this model
+                is_best = prec1 > best_prec1
+                best_prec1 = max(prec1, best_prec1)
+                save_checkpoint({
+                    'epoch': epoch + 1,
+                    'arch': args.arch,
+                    'state_dict': model.state_dict(),
+                    'best_prec1': best_prec1,
+                    'optimizer': optimizer.state_dict(),
+                }, is_best, args.prefix, fold_n=None)
+
+                print('Best accuracy so far: ', best_prec1)
+                print('Accuracy current fold: ', prec1)
+        else:
+            train_accuracies = []
+            val_losses = []
+            val_accuracies = []
+            correlations = []
+
+            # apply 5-fold cv using the training set splits in the dataset directory
+            k_folds = 5
+
+            for fold in range(0, k_folds):
+                print(f'now starting fold {fold}')
+                # initialize model architecture and possibly weights
+                model = None
+                if args.arch == "resnet_cw":
+                    if args.depth == 18:
+                        model = ResidualNetTransfer(2, args, [int(x) for x in args.whitened_layers.split(',')],
+                                                    arch='resnet18',
+                                                    layers=[2, 2, 2, 2],
+                                                    model_file='checkpoints/resnet_premirna_checkpoints'
+                                                               '/RESNET_PREMIRNA_BN_checkpoint.pth.tar')
+                elif args.arch == "resnet_bn":
+                    model = ResidualNetBN(2, args, arch='resnet18', layers=[2, 2, 2, 2],
+                                          model_file='checkpoints/resnet_premirna_checkpoints'
+                                                     '/RESNET_PREMIRNA_PRETRAIN_checkpoint '
+                                                     '.pth.tar')
+                elif args.arch == "deepmir_cw":
+                    model = DeepMirTransfer(args, [int(x) for x in args.whitened_layers.split(',')], arch='deepmir_cw',
+                                            model_file='checkpoints/deepmir_related_checkpoints/nonCW_training'
+                                                       '/deepmir_cw.pth')
+                elif args.arch == "deepmir_bn":
+                    model = DeepMirBN(args, arch='deepmir_bn', model_file=None)
+                elif args.arch == "deepmir_cw_bn":
+                    model = DeepMirTransfer(args, [int(x) for x in args.whitened_layers.split(',')], arch='deepmir_cw',
+                                            model_file='checkpoints/deepmir_related_checkpoints'
+                                                       '/DEEPMIR_PREMIRNA_BN_checkpoint_ '
+                                                       'new.pth.tar')
+                elif args.arch == 'deepmir_resnet_cw_v2':
+                    model = DeepMirResNetTransferv2(args, [int(x) for x in args.whitened_layers.split(',')],
+                                                    arch='deepmir_resnet_cw_v2',
+                                                    model_file='checkpoints/resnet_deepmir_v2/'
+                                                               'DEEPMIR_RESNET_PREMIRNA_v2_BN_1'
+                                                               '_checkpoint.pth.tar'
+                                                    )
+                elif args.arch == "deepmir_resnet_cw":
+                    model = DeepMirResNetTransfer(args, [int(x) for x in args.whitened_layers.split(',')],
+                                                  arch='deepmir_resnet_cw',
+                                                  model_file='checkpoints/DEEPMIR_RESNET_PREMIRNA_BN_2_checkpoint.pth'
+                                                             '.tar')
+
+                # define optimizer
+                optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum,
+                                            weight_decay=args.weight_decay)
+                model = torch.nn.DataParallel(model)
+                print('Model architecture: ', model)
+                print(f'Number of model parameters: {sum([p.data.nelement() for p in model.parameters()])}')
+
+                # add seeds for reproducibility
+                torch.manual_seed(args.seed)
+                np.random.seed(args.seed)
+
+                # create path links to data directories
+                traindir = os.path.join(args.data, f'train_fold{fold}')
+                valdir = os.path.join(args.data, f'val_fold{fold}')
+                conceptdir_train = os.path.join(args.data, f'concept_train_fold{fold}')
+
+                # create a balanced data loader for the training set using class weights calculated on the training set
+                train_loader = balanced_data_loader(args, traindir)
+
+                # initialize the concept data loader
+                concept_loaders = [
+                    torch.utils.data.DataLoader(
+                        datasets.ImageFolder(os.path.join(conceptdir_train, concept), transforms.Compose([
+                            transforms.ToTensor(),
+                        ])),
+                        batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=False)
+                    for concept in args.concepts.split(',')
+                ]
+
+                # create balanced data loader for the test set using class weights calculated on the test set
+                val_loader = torch.utils.data.DataLoader(
+                    datasets.ImageFolder(valdir, transforms.Compose([
+                        transforms.ToTensor(),
+                    ])),
+                    batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
+
+                # create another data loader for the test set that includes the image paths
+                val_loader_with_path = torch.utils.data.DataLoader(
+                    ImageFolderWithPaths(valdir, transforms.Compose([
+                        transforms.ToTensor(),
+                    ])),
+                    batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
+
+                run['config/dataset/path'] = traindir
+                run['config/model'] = type(model).__name__
+                run['config/criterion'] = type(criterion).__name__
+                run['config/optimizer'] = type(optimizer).__name__
+                run['config/lr'] = args.lr
+                run['config/batchsize'] = args.batch_size
+
+                print("Start training")
+                epoch = None
+                best_prec1 = 0  # best top-1 precision = top-1 accuracy
+                accuracies = []
+                val_losses = []
+                for epoch in range(args.start_epoch, args.start_epoch + args.epochs):
+                    adjust_learning_rate(optimizer, epoch)
+                    # train for one epoch
+                    acc, loss = train(train_loader, concept_loaders, model, criterion, optimizer, epoch, fold)
+                    # evaluate on validation set
+                    val_acc, val_loss = validate_train(val_loader, model, criterion, fold)
+                    accuracies.append(val_acc)
+                    val_losses.append(val_loss)
+
+                    # Log fold loss
+                    run[f"training/{fold}/loss"].log(loss)
+                    # Log fold accuracy
+                    run[f"training/{fold}/acc"].log(acc)
+                    # Log fold loss
+                    run[f"validation/{fold}/loss"].log(val_loss)
+                    # Log fold accuracy
+                    run[f"validation/{fold}/acc"].log(val_acc)
+
+                    # remember best prec-1 and save checkpoint for this model
+                    is_best = val_acc > best_prec1
+                    best_prec1 = max(val_acc, best_prec1)
+                    if epoch < 11:
+                        continue
+                    else:
+                        save_checkpoint({
+                            'epoch': epoch + 1,
+                            'arch': args.arch,
+                            'state_dict': model.state_dict(),
+                            'best_prec1': best_prec1,
+                            'optimizer': optimizer.state_dict(),
+                        }, is_best, args.prefix, fold_n=fold)
+
+                    print('Best accuracy so far: ', best_prec1)
+                    print('Accuracy current fold: ', val_acc)
+
+                    # add early stopping criteria: if the loss on the validation set has not improved over the last 5
+                    # epochs, stop the training
+                    if len(val_losses) > 5:
+                        if val_losses[-1] > val_losses[-5]:
+                            print('validation loss not decreased over 5 epochs')
+                            break
+
+                train_accuracies.append(acc)
+                val_accuracies.append(val_acc)
+
+                print("mean accuracy on training set: ", np.mean(train_accuracies))
+                print("std accuracy on training set: ", np.std(train_accuracies))
+                print("mean accuracy on validation set: ", np.mean(val_accuracies))
+                print("std accuracy on validation set: ", np.std(val_accuracies))
+                print('Max accuracy on validation set: ', np.max(val_accuracies), 'index: ', np.argmax(val_accuracies))
+
+                print('Start evaluation for decorrelation and concept learning')
+                concept_name = args.concepts.split(',')
+                base_dir = './plot/' + '_'.join(concept_name)
+                if not os.path.exists(base_dir):
+                    os.mkdir(base_dir)
+                dir = os.path.join(base_dir, 'validation')
+                if not os.path.exists(dir):
+                    os.mkdir(dir)
+                dir_fold = os.path.join(dir, str(fold))
+                if not os.path.exists(dir_fold):
+                    os.mkdir(dir_fold)
+                mean_correlation = plot_correlation(args, val_loader_with_path, model, layer=args.whitened_layers,
+                                                    evaluate=args.evaluate,
+                                                    fold=str(fold))
+                # Log batch loss
+                run[f"validation/correlation"].log(mean_correlation)
+
+                correlations.append(mean_correlation)
+                print("mean correlations on validation set: ", np.mean(correlations))
+                print("std correlations on validation set: ", np.std(correlations))
+                print('Min correlation on validation set: ', np.min(correlations), 'index: ', np.argmin(correlations))
+
+                print("Plot top50 activated images")
+                plot_concept_top50(args, val_loader_with_path, model, args.whitened_layers, False,
+                                   activation_mode=args.act_mode, evaluate=args.evaluate, fold=str(fold))
+                plot_top10(args, plot_cpt=args.concepts.split(','), layer=args.whitened_layers, evaluate=args.evaluate,
+                           fold=str(fold))
+
+            run.stop()
+
     else:
+        # create path links to data directories
+        testdir = os.path.join(args.data, 'test')
+        print(testdir)
+        conceptdir_test = os.path.join(args.data, 'concept_test')
+
+        # create balanced data loader for the test set using class weights calculated on the test set
+        test_loader = torch.utils.data.DataLoader(
+            datasets.ImageFolder(testdir, transforms.Compose([
+                transforms.ToTensor(),
+            ])),
+            batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
+
+        # create another data loader for the test set that includes the image paths
+        test_loader_with_path = torch.utils.data.DataLoader(
+            ImageFolderWithPaths(testdir, transforms.Compose([
+                transforms.ToTensor(),
+            ])),
+            batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
+
+        model = None
         if args.arch == "deepmir_resnet_cw":
             model = load_deepmir_resnet_model(args, arch=args.arch, whitened_layer=args.whitened_layers)
         elif args.arch == "deepmir_resnet_bn":
@@ -174,7 +344,7 @@ def main():
             model = load_resnet_model(args, checkpoint_folder="./checkpoints", whitened_layer=args.whitened_layers)
         elif args.arch == "deepmir_resnet_cw_v2":
             model = load_deepmir_resnet_cw_v2_model(args, checkpoint_folder="./checkpoints",
-                                                    whitened_layer=args.whitened_layers)
+                                                    whitened_layer=args.whitened_layers, fold_n=args.foldn_bestmodel)
         elif args.arch == "deepmir_resnet_bn_v2":
             model = load_deepmir_resnet_v2_bn_model(args, whitened_layer=args.whitened_layers)
 
@@ -182,25 +352,28 @@ def main():
         print("Start Plotting")
         if not os.path.exists('./plot/' + '_'.join(args.concepts.split(','))):
             os.mkdir('./plot/' + '_'.join(args.concepts.split(',')))
+
+        print("Start testing")
+        validate_test(test_loader, model, criterion)
+        print("Save activations relu after cw layer and in linear1")
+        get_activations_finalpart(args, test_loader_with_path, model, args.whitened_layers)
+        plot_figures(args, model, test_loader_with_path, conceptdir_test, test_loader, criterion)
+
+        print("Concept importance for targets")
         if len(args.whitened_layers) > 1:
             whitened_layers = [int(x) for x in args.whitened_layers.split(',')]
             for layer in whitened_layers:
-                concept_gradient_importance(args, test_loader, layer, arch=args.arch, num_classes=2, model=model)
+                concept_gradient_importance(args, test_loader, layer, arch=args.arch, num_classes=2)
         else:
-            concept_gradient_importance(args, test_loader, layer=args.whitened_layers, arch=args.arch, num_classes=2,
-                                        model=model)
 
-        print("Start testing")
-        validate(test_loader, model, criterion)
-        plot_figures(args, model, test_loader_with_path, train_loader, concept_loaders, conceptdir_test, test_loader,
-                     criterion)
-
+            concept_gradient_importance(args, test_loader, layer=args.whitened_layers, arch=args.arch, num_classes=2)
+        #
         # don't know what to do with the function below?
         # get_representation_distance_to_center(args, test_loader, args.whitened_layers, arch='deepmir_resnet_cw',
         #                                       model=model)
 
 
-def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
+def train(train_loader, concept_loaders, model, criterion, optimizer, epoch, fold):
     """
     :param train_loader: data loader with training images
     :param concept_loaders: data loader with concept images of training set
@@ -208,6 +381,7 @@ def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
     :param criterion: loss function
     :param optimizer: optimizer
     :param epoch: current training epoch
+    :param fold: fold number during k-fold cv
     :return: training script
     """
     batch_time = AverageMeter()
@@ -248,6 +422,7 @@ def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
         loss = criterion(output, target_var)  # update the loss function
         # measure accuracy and record loss
         [prec1] = accuracy(output.data, target, topk=(1,))
+
         losses.update(loss.data, input.size(0))
         top1.update(prec1.item(), input.size(0))
         # compute gradient and do loss step
@@ -265,12 +440,17 @@ def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
                   f'Loss {losses.val:.4f} ({losses.avg:.4f})\t'
                   f'Prec@1 {top1.val:.3f} ({top1.avg:.3f})')
 
+    print(' * Prec@1 {top1.avg:.3f}'.format(top1=top1))
 
-def validate(test_loader, model, criterion):
+    return top1.avg, losses.avg
+
+
+def validate_train(test_loader, model, criterion, fold):
     """
     :param test_loader: data loader containing the test set images
     :param model: model used for validation
     :param criterion: loss function
+    :param fold: fold number during k-fold cv
     :return: validation script
     """
     batch_time = AverageMeter()
@@ -305,7 +485,55 @@ def validate(test_loader, model, criterion):
 
     print(' * Prec@1 {top1.avg:.3f}'.format(top1=top1))
 
-    return top1.avg
+    return top1.avg, losses.avg
+
+
+def validate_test(test_loader, model, criterion):
+    """
+    :param test_loader: data loader containing the test set images
+    :param model: model used for validation
+    :param criterion: loss function
+    :return: validation script
+    """
+    batch_time = AverageMeter()
+    losses = AverageMeter()
+    top1 = AverageMeter()
+
+    # switch to evaluate mode
+    model.eval()
+    end = time.time()
+    # initialize empty list for storing predictions
+    predictions = []
+    with torch.no_grad():
+        for i, (input, target) in enumerate(test_loader):
+            # create autograd variables of the input and target so that hooks (forward and backward) can be used
+            # the hooks are used to track the gradient updates in layers that have hooks
+            input_var = torch.autograd.Variable(input)
+            target_var = torch.autograd.Variable(target)
+            output = model(input_var)  # compute model output
+            predictions.append(output.data.detach().numpy())
+            loss = criterion(output, target_var)  # update the loss function
+            # measure accuracy and record loss
+            [prec1] = accuracy(output.data, target, topk=(1,))
+            losses.update(loss.data, input.size(0))
+            top1.update(prec1.item(), input.size(0))
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if i % args.print_freq == 0:
+                print(f'Test: [{i}/{len(test_loader)}]\t'
+                      f'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                      f'Loss {losses.val:.4f} ({losses.avg:.4f})\t'
+                      f'Prec@1 {top1.val:.3f} ({top1.avg:.3f})')
+
+    print(' * Prec@1 {top1.avg:.3f}'.format(top1=top1))
+
+    # save predictions for creating decision tree / decision rules
+    np.save('./output/' + '_'.join(args.concepts.split(',')), predictions)
+
+    return losses.avg, top1.avg
 
 
 def train_baseline(train_loader, model, criterion, optimizer, epoch):
@@ -354,15 +582,14 @@ def train_baseline(train_loader, model, criterion, optimizer, epoch):
                   f'Loss {losses.val:.4f} ({losses.avg:.4f})\t'
                   f'Prec@1 {top1.val:.3f} ({top1.avg:.3f})')
 
+    return losses.avg, top1.avg
 
-def plot_figures(args, model, test_loader_with_path, train_loader, concept_loaders, conceptdir, test_loader,
-                 criterion):
+
+def plot_figures(args, model, test_loader_with_path, conceptdir, test_loader, criterion):
     """
     :param args: arguments given by user
     :param model: model used for training
     :param test_loader_with_path: data loader with test images (including path)
-    :param train_loader: data loader for training images
-    :param concept_loaders: data loader with concept images from training set
     :param conceptdir: directory containing concept images from test set
     :param test_loader: data loader with test images (without path)
     :param criterion: loss function
@@ -375,14 +602,16 @@ def plot_figures(args, model, test_loader_with_path, train_loader, concept_loade
 
     if args.arch == "deepmir_resnet_bn" or args.arch == "deepmir_resnet_bn_v2":
         print("Plot correlation")
-        plot_correlation_BN(args, test_loader_with_path, model, layer=args.whitened_layers)
+        mean_correlation = plot_correlation_BN(args, test_loader_with_path, model, layer=args.whitened_layers)
     elif args.arch == "deepmir_resnet_cw" or args.arch == "resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
         if len(args.whitened_layers) > 1:
             # split the layers in the whitened_layers string to get the individual layers
             whitened_layers = [int(x) for x in args.whitened_layers.split(',')]
             for layer in whitened_layers:
                 print("Plot correlation")
-                plot_correlation(args, test_loader_with_path, model, layer=str(layer))
+                mean_correlation = plot_correlation(args, test_loader_with_path, model, layer=str(layer),
+                                                    evaluate=args.evaluate,
+                                                    fold='0')
                 print("Plot intra- and inter-concept similarities")
                 intra_concept_dot_product_vs_inter_concept_dot_product(args, conceptdir, str(layer),
                                                                        plot_cpt=args.concepts.split(','),
@@ -395,8 +624,9 @@ def plot_figures(args, model, test_loader_with_path, train_loader, concept_loade
             # False is if you want the top50 concept images for the whitened layer and the assigned neuron,
             # otherwise you can say for which layer neuron in that layer you want the top 50
             plot_concept_top50(args, test_loader_with_path, model, args.whitened_layers, False,
-                               activation_mode=args.act_mode)
-            plot_top10(args, plot_cpt=args.concepts.split(','), layer=args.whitened_layers)
+                               activation_mode=args.act_mode, evaluate=args.evaluate, fold='0')
+            plot_top10(args, plot_cpt=args.concepts.split(','), layer=args.whitened_layers, evaluate=args.evaluate,
+                       fold='0')
             print("Plot 2d slice of representation")
             plot_concept_representation(args, test_loader_with_path, model, args.whitened_layers,
                                         plot_cpt=[concept_name[0], concept_name[1]], activation_mode=args.act_mode)
@@ -411,7 +641,9 @@ def plot_figures(args, model, test_loader_with_path, train_loader, concept_loade
 
         else:
             print("Plot correlation")
-            plot_correlation(args, test_loader_with_path, model, layer=args.whitened_layers)
+            mean_correlation = plot_correlation(args, test_loader_with_path, model, layer=args.whitened_layers,
+                                                evaluate=args.evaluate,
+                                                fold='0')
             # plot_concept_top50(args, test_loader_with_path, model, args.whitened_layers, 10,
             #                    activation_mode=args.act_mode)
             # plot_top10(args, plot_cpt=args.concepts.split(','), layer=args.whitened_layers)
@@ -419,8 +651,9 @@ def plot_figures(args, model, test_loader_with_path, train_loader, concept_loade
             # False is if you want the top50 concept images for the whitened layer and the assigned neuron,
             # otherwise you can say for which layer neuron in that layer you want the top 50
             plot_concept_top50(args, test_loader_with_path, model, args.whitened_layers, False,
-                               activation_mode=args.act_mode)
-            plot_top10(args, plot_cpt=args.concepts.split(','), layer=args.whitened_layers)
+                               activation_mode=args.act_mode, evaluate=args.evaluate, fold='0')
+            plot_top10(args, plot_cpt=args.concepts.split(','), layer=args.whitened_layers, evaluate=args.evaluate,
+                       fold='0')
             print("Plot 2d slice of representation")
             plot_concept_representation(args, test_loader_with_path, model, args.whitened_layers,
                                         plot_cpt=[concept_name[0], concept_name[1]], activation_mode=args.act_mode)
@@ -430,30 +663,41 @@ def plot_figures(args, model, test_loader_with_path, train_loader, concept_loade
                                                                    arch='deepmir_resnet_cw',
                                                                    model=model)
 
-            print("Plot concept importance for overall classifier")
-            concept_permutation_importance(args, test_loader, args.whitened_layers, criterion, arch=args.arch,
-                                           num_concepts=len(args.concepts.split(',')), model=model)
+            # print("Plot concept importance for overall classifier")
+            # concept_permutation_importance(args, test_loader, args.whitened_layers, criterion, arch=args.arch,
+            #                                num_concepts=len(args.concepts.split(',')), model=model)
+            #
+            print("Plot AUC-concept_purity")
+            plot_auc_cw(args, conceptdir, whitened_layers=args.whitened_layers, plot_cpt=concept_name,
+                        activation_mode=args.act_mode)
+            # # print("AUC plotting")
+            # # plot_auc(args, plot_cpt=concept_name)
 
-            # print("Plot receptive field over most activated img")
+            print("Plot receptive field over most activated img")
+            saliency_map_concept_cover(args, test_loader_with_path, args.whitened_layers, arch=args.arch, dataset=None,
+                                       num_concepts=len(args.concepts.split(',')), model=model)
+            # one below is for checking the other neurons in the layer that are not aligned with concepts
             # saliency_map_concept_cover_2(args, test_loader, args.whitened_layers, arch=args.arch,
             #                              dataset=None, num_concepts=len(args.concepts.split(',')), model=model)
 
 
-def save_checkpoint(state, is_best, prefix, checkpoint_folder='./checkpoints'):
+def save_checkpoint(state, is_best, prefix, checkpoint_folder='./checkpoints', fold_n=None):
     """
     :param state: model state with weight dictionary
     :param is_best: boolean specifying whether model is the best based on accuracy
     :param prefix: name to be used for stored object
     :param checkpoint_folder: folder where checkpoint needs to be stored
+    :param fold_n: current fold in k-fold cross validation
     :return: storage of weights (checkpoint) of model in checkpoint folder
     """
     concept_name = '_'.join(args.concepts.split(','))
     if not os.path.exists(os.path.join(checkpoint_folder, concept_name)):
         os.mkdir(os.path.join(checkpoint_folder, concept_name))
-    filename = os.path.join(checkpoint_folder, concept_name, '%s_checkpoint.pth.tar' % prefix)
+    filename = os.path.join(checkpoint_folder, concept_name, f'{prefix}_foldn{str(fold_n)}_checkpoint.pth.tar')
     torch.save(state, filename)
     if is_best:
-        shutil.copyfile(filename, os.path.join(checkpoint_folder, concept_name, '%s_model_best.pth.tar' % prefix))
+        shutil.copyfile(filename, os.path.join(checkpoint_folder, concept_name, f'{prefix}_foldn{str(fold_n)}_model_'
+                                                                                f'best.pth.tar'))
 
 
 class AverageMeter(object):
@@ -564,4 +808,3 @@ def balanced_data_loader(args, dataset_dir):
 
 if __name__ == '__main__':
     main()
-
