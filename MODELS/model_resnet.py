@@ -1,12 +1,8 @@
 import os
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torchvision.models as models
-import math
-from torch.nn import init
 from .iterative_normalization import IterNormRotation as cw_layer
-from typing import Type, Any, Callable, Union, List, Optional
 from torch import Tensor
 
 
@@ -40,10 +36,12 @@ class ResidualNetTransfer(nn.Module):
                 self.model.layer2[whitened_layer - layers[0] - 1].bn1 = cw_layer(128, activation_mode=args.act_mode)
             elif whitened_layer <= layers[0] + layers[1] + layers[2]:
                 self.model.layer3[whitened_layer - layers[0] - layers[1] - 1].bn1 = cw_layer(256,
-                                                                                             activation_mode=args.act_mode)
+                                                                                             activation_mode=
+                                                                                             args.act_mode)
             elif whitened_layer <= layers[0] + layers[1] + layers[2] + layers[3]:
                 self.model.layer4[whitened_layer - layers[0] - layers[1] - layers[2] - 1].bn1 = cw_layer(512,
-                                                                                                         activation_mode=args.act_mode)
+                                                                                                         activation_mode
+                                                                                                         =args.act_mode)
 
     def change_mode(self, mode):
         """
@@ -76,75 +74,6 @@ class ResidualNetTransfer(nn.Module):
                 self.model.layer3[whitened_layer - layers[0] - layers[1] - 1].bn1.update_rotation_matrix()
             elif whitened_layer <= layers[0] + layers[1] + layers[2] + layers[3]:
                 self.model.layer4[whitened_layer - layers[0] - layers[1] - layers[2] - 1].bn1.update_rotation_matrix()
-
-    def forward(self, x):
-        return self.model(x)
-
-
-class DenseNetTransfer(nn.Module):
-    def __init__(self, num_classes, args, whitened_layers=None, arch='densenet161', model_file=None):
-
-        super(DenseNetTransfer, self).__init__()
-        self.model = models.__dict__[arch](num_classes=num_classes)
-        if model_file is not None:
-            checkpoint = torch.load(model_file, map_location='cpu')
-            args.start_epoch = checkpoint['epoch']
-            args.best_prec1 = checkpoint['best_prec1']
-            import re
-
-            def repl(matchobj):
-                return matchobj.group(0)[1:]
-
-            state_dict = {re.sub('\.\d+\.', repl, str.replace(k, 'module.', '')): v for k, v in
-                          checkpoint['state_dict'].items()}
-            self.model.load_state_dict(state_dict)
-
-        self.whitened_layers = whitened_layers
-        for whitened_layer in whitened_layers:
-            if whitened_layer == 1:
-                self.model.features.norm0 = cw_layer(64, activation_mode=args.act_mode)
-            elif whitened_layer == 2:
-                self.model.features.transition1.norm = cw_layer(384, activation_mode=args.act_mode)
-            elif whitened_layer == 3:
-                self.model.features.transition2.norm = cw_layer(768, activation_mode=args.act_mode)
-            elif whitened_layer == 4:
-                self.model.features.transition3.norm = cw_layer(2112, activation_mode=args.act_mode)
-            elif whitened_layer == 5:
-                self.model.features.norm5 = cw_layer(2208, activation_mode=args.act_mode)
-
-    def change_mode(self, mode):
-        """
-        Change the training mode
-        mode = -1, no update for gradient matrix G
-             = 0 to k-1, the column index of gradient matrix G that needs to be updated
-        """
-        for whitened_layer in self.whitened_layers:
-            if whitened_layer == 1:
-                self.model.features.norm0.mode = mode
-            elif whitened_layer == 2:
-                self.model.features.transition1.norm.mode = mode
-            elif whitened_layer == 3:
-                self.model.features.transition2.norm.mode = mode
-            elif whitened_layer == 4:
-                self.model.features.transition3.norm.mode = mode
-            elif whitened_layer == 5:
-                self.model.features.norm5.mode = mode
-
-    def update_rotation_matrix(self):
-        """
-        update the rotation R using accumulated gradient G
-        """
-        for whitened_layer in self.whitened_layers:
-            if whitened_layer == 1:
-                self.model.features.norm0.update_rotation_matrix()
-            elif whitened_layer == 2:
-                self.model.features.transition1.norm.update_rotation_matrix()
-            elif whitened_layer == 3:
-                self.model.features.transition2.norm.update_rotation_matrix()
-            elif whitened_layer == 4:
-                self.model.features.transition3.norm.update_rotation_matrix()
-            elif whitened_layer == 5:
-                self.model.features.norm5.update_rotation_matrix()
 
     def forward(self, x):
         return self.model(x)
@@ -414,27 +343,6 @@ class ResidualNetBN(nn.Module):
             # state_dict = {str.replace(k, 'module.', ''): v for k, v in checkpoint['state_dict'].items()}
             state_dict = {str.replace(k, 'module.model.', ''): v for k, v in checkpoint['state_dict'].items()}
 
-            self.model.load_state_dict(state_dict)
-
-    def forward(self, x):
-        return self.model(x)
-
-
-class DenseNetBN(nn.Module):
-    def __init__(self, num_classes, args, arch='densenet161', model_file=None):
-        super(DenseNetBN, self).__init__()
-        self.model = models.__dict__[arch](num_classes=num_classes)
-        if model_file is not None:
-            checkpoint = torch.load(model_file, map_location='cpu')
-            args.start_epoch = checkpoint['epoch']
-            args.best_prec1 = checkpoint['best_prec1']
-            import re
-
-            def repl(matchobj):
-                return matchobj.group(0)[1:]
-
-            state_dict = {re.sub('\.\d+\.', repl, str.replace(k, 'module.', '')): v for k, v in
-                          checkpoint['state_dict'].items()}
             self.model.load_state_dict(state_dict)
 
     def forward(self, x):

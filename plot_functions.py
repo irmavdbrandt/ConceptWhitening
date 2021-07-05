@@ -1,12 +1,3 @@
-"""
-Plot functions to generate figures in the paper
-
-Note that these functions only work for ResNet, as claimed
-in the paper, although one can adapt this code for other
-type of architectures without too many efforts.
-
-"""
-
 import random
 import matplotlib
 import matplotlib.image as mpimg
@@ -14,18 +5,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import skimage.measure
-import torch.functional as F
+import torch.nn.functional as F
 import torch.utils.data
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from PIL import Image
 from numpy import linalg as LA
-from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.metrics import roc_auc_score
 from shutil import copyfile
 from MODELS.iterative_normalization import iterative_normalization_py
 from MODELS.model_resnet import *
 from train_places import AverageMeter, accuracy
+
 
 np.seterr(divide='ignore', invalid='ignore')
 
@@ -54,11 +45,11 @@ def plot_concept_top50(args, test_loader, model, whitened_layers, print_other=Fa
     :param args: arguments given by user
     :param test_loader: data loader containing the test images
     :param model: model used for training
-    :param whitened_layers: list with layers that need to be whitened
+    :param whitened_layers: whitened layer
     :param print_other: boolean specifying whether other neurons not linked to concepts should be used
     :param activation_mode: which activation mode is used to find the top50 most activated images
-    :param evaluate:
-    :param fold:
+    :param evaluate: boolean specifying whether the we are in evaluation mode (testing) or not (validating)
+    :param fold: fold number, required when evaluate = True
     :return: this function finds the top 50 images that gets the greatest activations with respect to the concepts.
     Concept activation values are obtained based on iternorm_rotation module outputs.
     Since concept corresponds to channels in the output, we look for the top50 images whose kth channel activations
@@ -75,6 +66,8 @@ def plot_concept_top50(args, test_loader, model, whitened_layers, print_other=Fa
         os.mkdir(dst)
     # split the string of whitening layers to get the individual layers
     layer_list = whitened_layers.split(',')
+    # if we want to visualize the top50 images for a neuron (dimension) not aligned with concepts, we have
+    # print_other = True. Here we create a directory for this other dimension
     if print_other:
         folder = dst + '_'.join(layer_list) + '_rot_otherdim/'
     else:
@@ -113,8 +106,7 @@ def plot_concept_top50(args, test_loader, model, whitened_layers, print_other=Fa
                 model.layer3[layer - layers[0] - layers[1] - 1].bn1.register_forward_hook(hook)
             elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
                 model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
-    if args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2" or \
-            args.arch == "deepmir_resnet_cw_v3":
+    if args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
         for layer in layer_list:
             if int(layer) == 1:
                 model.bn1.register_forward_hook(hook)
@@ -195,8 +187,13 @@ def plot_concept_top50(args, test_loader, model, whitened_layers, print_other=Fa
 
 def plot_top10(args, plot_cpt=None, layer=None, evaluate=False, fold='0'):
     """
-    :param evaluate:
-    :param fold:
+    :param args: arguments given by user
+    :param plot_cpt: list of concepts
+    :param layer: whitened layer
+    :param evaluate: boolean specifying whether the we are in evaluation mode (testing) or not (validating)
+    :param fold: fold number, required when evaluate = True
+    :return: plot showing the top-10 most activated images along the concept axes. The images are obtained from the
+    plot_concept_top50() function.
     """
     if len(layer) > 1:
         whitened_layer = [int(x) for x in layer.split(',')]
@@ -212,6 +209,7 @@ def plot_top10(args, plot_cpt=None, layer=None, evaluate=False, fold='0'):
         folder = './plot/' + '_'.join(args.concepts.split(',')) + '/validation/' + fold + '/' + args.arch + '/' \
                  + str_layer + '_rot_cw/'
 
+    # case for when we only have 1 concept, we create a plot with 2 rows of 5 images each
     if len(plot_cpt) == 1:
         fig, axes = plt.subplots(figsize=(30, 3 * len(plot_cpt)), nrows=2, ncols=5)
         c = 0
@@ -232,6 +230,7 @@ def plot_top10(args, plot_cpt=None, layer=None, evaluate=False, fold='0'):
         fig.tight_layout()
         plt.show()
         fig.savefig(folder + 'layer' + str(layer) + '.jpg')
+    # in case we have more than 1 concept, we create a plot with 10 images in each row
     else:
         fig, axes = plt.subplots(figsize=(30, 3 * len(plot_cpt)), nrows=len(plot_cpt), ncols=10)
 
@@ -268,9 +267,15 @@ def plot_top10(args, plot_cpt=None, layer=None, evaluate=False, fold='0'):
             fig.savefig(folder + 'layer' + str(layer) + '.jpg')
 
 
-def get_layer_representation(args, val_loader, layer, cpt_idx, model):
+def get_layer_representation(args, test_loader, layer, cpt_idx, model):
     """
-    This method gets the activations of output from iternorm_rotation for images (from val_loader) at channel (cpt_idx)
+    :param args: arguments given by user
+    :param test_loader: data loader providing images from the validation/test set
+    :param layer: whitened layer
+    :param cpt_idx: index of neuron that is aligned with concept of interest
+    :param model: trained model
+    :return: This method gets the activations of output from iternorm_rotation for images (from val_loader) at
+    channel (cpt_idx)
     """
     with torch.no_grad():
         model.eval()
@@ -293,8 +298,8 @@ def get_layer_representation(args, val_loader, layer, cpt_idx, model):
 
             outputs.append(X_hat.cpu().numpy())
 
+        layer = int(layer)
         if args.arch == "resnet_cw":
-            layer = int(layer)
             if layer <= layers[0]:
                 model.layer1[layer - 1].bn1.register_forward_hook(hook)
             elif layer <= layers[0] + layers[1]:
@@ -304,22 +309,23 @@ def get_layer_representation(args, val_loader, layer, cpt_idx, model):
             elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
                 model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
         elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
-            if int(layer) == 1:
+            if layer == 1:
                 model.bn1.register_forward_hook(hook)
-            elif int(layer) == 2:
+            elif layer == 2:
                 model.bn2.register_forward_hook(hook)
-            elif int(layer) == 3:
+            elif layer == 3:
                 model.bn3.register_forward_hook(hook)
 
         paths = []
         vals = None
-        for i, (input_img, _, path) in enumerate(val_loader):
+        for i, (input_img, _, path) in enumerate(test_loader):
             paths += list(path)
             input_var = torch.autograd.Variable(input_img)
             outputs = []
             model(input_var)
             val = []
             for output in outputs:
+                # get the activation value at the index of the concept of interest
                 val.append(output.sum((2, 3))[:, cpt_idx])
             val = np.array(val)
             if i == 0:
@@ -330,9 +336,14 @@ def get_layer_representation(args, val_loader, layer, cpt_idx, model):
     return paths, vals
 
 
-def get_representation_distance_to_center(args, val_loader, layer, arch='resnet_cw', model=None):
+def get_representation_distance_to_center(args, test_loader, layer, arch='resnet_cw', model=None):
     """
-    This method obtains the vector length of a representation (distance to origin)
+    :param args: arguments given by user
+    :param test_loader: data loader providing images from the validation/test set
+    :param layer: whitened layer
+    :param arch: model architecture
+    :param model: trained model
+    :return: This method obtains the vector length of a representation (distance to origin)
     Can choose resnet_cw or resnet_original
     """
 
@@ -381,7 +392,7 @@ def get_representation_distance_to_center(args, val_loader, layer, arch='resnet_
 
         paths = []
         vals = []
-        for i, (input_img, _) in enumerate(val_loader):
+        for i, (input_img, _) in enumerate(test_loader):
             # paths += list(path)
             # if i==500:
             #     break
@@ -412,11 +423,11 @@ def intra_concept_dot_product_vs_inter_concept_dot_product(args, concept_dir, la
                                                            model=None):
     """
     :param args: arguments given by user
-    :param concept_dir: directory containing concept images of test set
-    :param layer: whitening layer
-    :param plot_cpt: concepts
+    :param concept_dir: directory containing concept images of test/validation set
+    :param layer: whitened layer
+    :param plot_cpt: list of concepts
     :param arch: model architecture
-    :param model: model used for training
+    :param model: trained model
     :return: this method compares the intra concept group dot product with inter concept group dot product
     """
     # create directory where results will be stored
@@ -475,8 +486,8 @@ def intra_concept_dot_product_vs_inter_concept_dot_product(args, concept_dir, la
                 outputs.append(X_hat.cpu().numpy())
 
             # apply the hooks to the CW layers, depending on which layer in the model is whitened
+            layer = int(layer)
             if args.arch == "resnet_cw":
-                layer = int(layer)
                 if layer <= layers[0]:
                     model.layer1[layer - 1].bn1.register_forward_hook(hook)
                 elif layer <= layers[0] + layers[1]:
@@ -486,11 +497,11 @@ def intra_concept_dot_product_vs_inter_concept_dot_product(args, concept_dir, la
                 elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
                     model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
             elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
-                if int(layer) == 1:
+                if layer == 1:
                     model.bn1.register_forward_hook(hook)
-                elif int(layer) == 2:
+                elif layer == 2:
                     model.bn2.register_forward_hook(hook)
-                elif int(layer) == 3:
+                elif layer == 3:
                     model.bn3.register_forward_hook(hook)
 
             for j, (input, y, path) in enumerate(concept_loader):
@@ -551,12 +562,18 @@ def intra_concept_dot_product_vs_inter_concept_dot_product(args, concept_dir, la
     plt.savefig(dst + arch + '_' + str(layer) + '.jpg')
 
     return intra_dot_product_means, inter_dot_product_means, intra_dot_product_means_normed, \
-           inter_dot_product_means_normed
+            inter_dot_product_means_normed
 
 
-def plot_trajectory(args, val_loader, whitened_layers, plot_cpt=None, model=None):
+def plot_trajectory(args, test_loader, whitened_layers, plot_cpt=None, model=None):
     """
-    This function plots the relative activations of a image on two different concepts.
+    :param args: arguments given by user
+    :param test_loader: data loader providing images from the validation/test set
+    :param whitened_layers: whitened layers. Note, this function can only be used when multiple layers have been
+    whitened!!
+    :param plot_cpt: list of concepts
+    :param model: trained model
+    :return: This function plots the relative activations of a image on two different concepts.
     """
     dst = './plot/' + '_'.join(args.concepts.split(',')) + '/' + '/trajectory_all/'
     if not os.path.exists(dst):
@@ -568,9 +585,9 @@ def plot_trajectory(args, val_loader, whitened_layers, plot_cpt=None, model=None
     layer_list = whitened_layers.split(',')
     for i, layer in enumerate(layer_list):
         if i == 0:
-            paths, vals = get_layer_representation(args, val_loader, layer, cpt_idx, model)
+            paths, vals = get_layer_representation(args, test_loader, layer, cpt_idx, model)
         else:
-            _, val = get_layer_representation(args, val_loader, layer, cpt_idx, model)
+            _, val = get_layer_representation(args, test_loader, layer, cpt_idx, model)
             vals = np.concatenate((vals, val), 0)
     try:
         os.mkdir('{}{}'.format(dst, '_'.join(plot_cpt)))
@@ -615,8 +632,14 @@ def plot_trajectory(args, val_loader, whitened_layers, plot_cpt=None, model=None
 
 def plot_auc_cw(args, concept_dir, whitened_layers, plot_cpt=None, activation_mode='pool_max'):
     """
-    For each layer and each concept, using activation value as the predicted probability of being a certain concept,
-    auc score is computed with respect to label
+    :param args: arguments given by user
+    :param concept_dir: directory containing concept images in the test/validation set
+    :param whitened_layers: whitened layers
+    :param plot_cpt: list of concepts
+    :param activation_mode: activation mode chosen to compute the activation score for a concept image along the
+     concept axis
+    :return: For each layer and each concept, using activation value as the predicted probability of being a certain
+    concept, auc score is computed with respect to label
     """
     dst = './plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/auc/'
     if not os.path.exists(dst):
@@ -669,8 +692,8 @@ def plot_auc_cw(args, concept_dir, whitened_layers, plot_cpt=None, activation_mo
 
                     outputs.append(X_hat.cpu().numpy())
 
+                layer = int(layer)
                 if args.arch == "resnet_cw":
-                    layer = int(layer)
                     if layer <= layers[0]:
                         model.layer1[layer - 1].bn1.register_forward_hook(hook)
                     elif layer <= layers[0] + layers[1]:
@@ -680,11 +703,11 @@ def plot_auc_cw(args, concept_dir, whitened_layers, plot_cpt=None, activation_mo
                     elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
                         model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
                 elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
-                    if int(layer) == 1:
+                    if layer == 1:
                         model.bn1.register_forward_hook(hook)
-                    elif int(layer) == 2:
+                    elif layer == 2:
                         model.bn2.register_forward_hook(hook)
-                    elif int(layer) == 3:
+                    elif layer == 3:
                         model.bn3.register_forward_hook(hook)
 
                 labels = []
@@ -704,7 +727,7 @@ def plot_auc_cw(args, concept_dir, whitened_layers, plot_cpt=None, activation_mo
                             act = (output * pos_bool).sum((2, 3)) / (pos_bool.sum((2, 3)) + 0.0001)
                             vals += list(act[:, cpt_idx])
                         elif activation_mode == 'pool_max':
-                            kernel_size = 3
+                            kernel_size = 2
                             r = output.shape[3] % kernel_size
                             if r == 0:
                                 vals += list(
@@ -762,133 +785,21 @@ def plot_auc_cw(args, concept_dir, whitened_layers, plot_cpt=None, activation_mo
     return aucs
 
 
-def plot_auc_filter(args, model, conceptdir, whitened_layers, plot_cpt=None,
-                    activation_mode='pool_max'):
-    """
-    For each concept and output of each layer, look for the channel in the output that best predicts the concept class
-    (binary classification). The activation of a channel that does the best when used as the predicted probability
-    (measured using AUC) is assumed to be the channel that best represents the concept.
-    """
-    # dst = './plot/' + 'resnet_cw' + str(args.depth) + '/auc/filter/'
-    if plot_cpt is None:
-        plot_cpt = ['airplane', 'bed', 'person']
-    dst = './plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + str(args.depth) + '/auc/filter/'
-    if not os.path.exists(dst):
-        os.mkdir(dst)
-
-    layer_list = whitened_layers.split(',')
-    aucs = np.zeros((len(plot_cpt), len(layer_list)))
-    aucs_err = np.zeros((len(plot_cpt), len(layer_list)))
-
-    model.eval()
-    model = model.module
-    layers = model.layers
-    model = model.model
-
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-    concept_loader_test = torch.utils.data.DataLoader(
-        datasets.ImageFolder(conceptdir, transforms.Compose([
-            transforms.Scale(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ])),
-        batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=False)
-    concept_list = os.listdir(conceptdir)
-    concept_list.sort()
-
-    aucs = np.zeros((len(plot_cpt), len(layer_list)))
-
-    with torch.no_grad():
-        outputs = []
-
-        def hook(module, input, output):
-            outputs.append(output.cpu().numpy())
-
-        for layer in layer_list:
-            layer = int(layer)
-            if layer <= layers[0]:
-                model.layer1[layer - 1].bn1.register_forward_hook(hook)
-            elif layer <= layers[0] + layers[1]:
-                model.layer2[layer - layers[0] - 1].bn1.register_forward_hook(hook)
-            elif layer <= layers[0] + layers[1] + layers[2]:
-                model.layer3[layer - layers[0] - layers[1] - 1].bn1.register_forward_hook(hook)
-            elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
-                model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
-
-        labels = []
-        activation_test = None
-        for i, (input_img, y) in enumerate(concept_loader_test):
-            labels += list(y.cpu().numpy())
-            outputs = []
-            input_var = torch.autograd.Variable(input_img).cuda()
-            model(input_var)
-            if i == 0:
-                activation_test = outputs
-            else:
-                for k in range(len(outputs)):
-                    activation_test[k] = np.concatenate((activation_test[k], outputs[k]), 0)
-        labels = np.array(labels).astype('int32')
-
-        for c, cpt in enumerate(plot_cpt):
-            cpt_idx_2 = concept_list.index(cpt)
-            for i in range(len(layer_list)):
-                if activation_mode == 'mean':
-                    x_test = activation_test[i].mean((2, 3))
-                elif activation_mode == 'max':
-                    x_test = activation_test[i].max((2, 3))
-                elif activation_mode == 'pos_mean':
-                    pos_bool = (activation_test[i] > 0).astype('int32')
-                    x_test = (activation_test[i] * pos_bool).sum((2, 3)) / (pos_bool.sum((2, 3)) + 0.0001)
-                elif activation_mode == 'pool_max':
-                    kernel_size = 3
-                    r = activation_test[i].shape[3] % kernel_size
-                    if r == 0:
-                        x_test = skimage.measure.block_reduce(activation_test[i][:, :, :, :],
-                                                              (1, 1, kernel_size, kernel_size), np.max).mean((2, 3))
-                    else:
-                        x_test = skimage.measure.block_reduce(activation_test[i][:, :, :-r, :-r],
-                                                              (1, 1, kernel_size, kernel_size), np.max).mean((2, 3))
-                elif activation_mode == 'pool_max_s1':
-                    X_test = torch.Tensor(activation_test[i])
-                    maxpool_value, maxpool_indices = F.max_pool2d(X_test, kernel_size=3, stride=1,
-                                                                  return_indices=True)
-                    X_test_unpool = F.max_unpool2d(maxpool_value, maxpool_indices, kernel_size=3, stride=1)
-                    maxpool_bool = X_test == X_test_unpool
-                    x_test = (X_test_unpool.sum((2, 3)) / maxpool_bool.sum((2, 3)).float()).numpy()
-                y_test = (labels == cpt_idx_2).astype('int32')
-                t = 5
-                auc_t = np.zeros([x_test.shape[1], t])
-                n_samples = labels.shape[0]
-                idx = np.array_split(np.random.permutation(n_samples), t)
-                for j in range(x_test.shape[1]):
-                    score = x_test[:, j]
-                    for k in range(t):
-                        # aucs[c,i] = max(roc_auc_score(y_test, score),aucs[c,i])
-                        # auc_t[k] = max(roc_auc_score(y_test[idx[k]], score[idx[k]]),auc_t[k])
-                        auc_t[j, k] = roc_auc_score(y_test[idx[k]], score[idx[k]])
-
-                filter_i = auc_t.mean(1).argmax()
-                aucs[c, i] = np.mean(auc_t[filter_i])
-                aucs_err[c, i] = np.std(auc_t[filter_i])
-                print(aucs[c, i])
-                print(aucs_err[c, i])
-    print('AUC-best_filter', aucs)
-    print('AUC-best_filter-err', aucs_err)
-    np.save(dst + 'aucs_filter.npy', aucs)
-    np.save(dst + 'aucs_filter_err.npy', aucs_err)
-    return aucs
-
-
 def plot_auc(args, plot_cpt=None):
+    """
+    :param args: arguments given by user
+    :param plot_cpt: list of concepts
+    :return: barplot showing the auc scores obtained from plot_auc_cw for the concepts in plot_cpt
+    """
+    # create folder where images will be stored
     folder = './plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/auc/'
     if not os.path.exists(folder):
         os.mkdir(folder)
+    # load the auc scores and their std's saved from the plot_auc_cw function
     aucs_cw = np.load(folder + 'cw/' + 'aucs_cw.npy')
     aucs_cw_err = np.load(folder + 'cw/' + 'aucs_cw_err.npy')
 
+    # create the barplot
     for c, cpt in enumerate(plot_cpt):
         fig = plt.figure(figsize=(5, 5))
         plt.errorbar([2, 3], aucs_cw[c], yerr=aucs_cw_err[c], label='CW')
@@ -898,8 +809,17 @@ def plot_auc(args, plot_cpt=None):
         plt.savefig('{}/{}.jpg'.format(folder, cpt))
 
 
-def plot_concept_representation(args, val_loader, model, whitened_layers, plot_cpt=None,
-                                activation_mode='mean'):
+def plot_concept_representation(args, test_loader, model, whitened_layers, plot_cpt=None, activation_mode='mean'):
+    """
+    :param args: arguments given by user
+    :param test_loader: data loader providing images from the validation/test set
+    :param model: trained model
+    :param whitened_layers: whitened layers
+    :param plot_cpt: list of concepts
+    :param activation_mode: activation mode chosen to compute the activation score for a concept image along the
+     concept axis
+    :return: ....
+    """
     with torch.no_grad():
         dst = './plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/representation/'
         if not os.path.exists(dst):
@@ -954,7 +874,7 @@ def plot_concept_representation(args, val_loader, model, whitened_layers, plot_c
 
         paths = []
         vals = None
-        for i, (input_img, _, path) in enumerate(val_loader):
+        for i, (input_img, _, path) in enumerate(test_loader):
             paths += list(path)
             input_var = torch.autograd.Variable(input_img)
             outputs = []
@@ -1027,10 +947,16 @@ def plot_concept_representation(args, val_loader, model, whitened_layers, plot_c
     return print("concept representation plot done")
 
 
-def plot_correlation(args, val_loader, model, layer, evaluate=False, fold='0'):
+def plot_correlation(args, test_loader, model, layer, evaluate=False, fold='0'):
     """
-    :param evaluate:
-    :param fold:
+    :param args: arguments given by user
+    :param test_loader: data loader containing the validation/test images
+    :param model: trained model
+    :param layer: whitened layer
+    :param evaluate: boolean specifying whether the we are in evaluation mode (testing) or not (validating)
+    :param fold: fold number, required when evaluate = True
+    :return: correlation matrix showing the absolute correlation between the axes (neurons) of the whitened layers and
+    the mean correlation.
     """
     with torch.no_grad():
         if evaluate:
@@ -1067,8 +993,7 @@ def plot_correlation(args, val_loader, model, layer, evaluate=False, fold='0'):
                 model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
         elif args.arch == "deepmir_cw_bn":
             model.features[layer - 1].register_forward_hook(hook)
-        elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2" or \
-                args.arch == "deepmir_resnet_cw_v3":
+        elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
             if layer == 1:
                 model.relu3.register_forward_hook(hook)
             elif layer == 2:
@@ -1076,7 +1001,7 @@ def plot_correlation(args, val_loader, model, layer, evaluate=False, fold='0'):
             elif layer == 3:
                 model.relu9.register_forward_hook(hook)
 
-        for i, (input_tensor, _, path) in enumerate(val_loader):
+        for i, (input_tensor, _, path) in enumerate(test_loader):
             input_var = torch.autograd.Variable(input_tensor)
             model(input_var)
             # take only the activations of the first 50 images in the test set (which is not what I want for the test
@@ -1101,12 +1026,21 @@ def plot_correlation(args, val_loader, model, layer, evaluate=False, fold='0'):
         return mean_corr
 
 
-def plot_correlation_BN(args, val_loader, model, layer):
+def plot_correlation_BN(args, test_loader, model, layer):
+    """
+    :param args: arguments given by user
+    :param test_loader: data loader containing the validation/test images
+    :param model: trained model
+    :param layer: batch normalization layer
+    :return: correlation matrix showing the absolute correlation between the axes (neurons) of a batch normalization
+    layer and the mean correlation.
+    """
     with torch.no_grad():
+        # create directory where plot will be stored
         dst = './plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/'
         if not os.path.exists(dst):
             os.mkdir(dst)
-        dst = dst + 'correlation_matrix/'
+        dst = dst + 'correlation_matrix_BN/'
         if not os.path.exists(dst):
             os.mkdir(dst)
         model.eval()
@@ -1117,11 +1051,19 @@ def plot_correlation_BN(args, val_loader, model, layer):
         outputs = []
 
         def hook(module, input, output):
+            """
+            :param module: layer module
+            :param input: input of layer
+            :param output: output of layer
+            :return: output values (i.e. activations) of layer of interest appended to outputs list
+            """
             size_X = output.size()
             X = output.transpose(0, 1).reshape(size_X[1], -1).transpose(0, 1)
             M = X.cpu().numpy()
             outputs.append(M)
 
+        # append hooks that save the inputs/outputs to the activation function of the batch normalization layer of
+        # interest
         layer = int(layer)
         if args.arch == "resnet_cw":
             if layer <= layers[0]:
@@ -1133,24 +1075,29 @@ def plot_correlation_BN(args, val_loader, model, layer):
             elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
                 model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
         elif args.arch == "deepmir_resnet_bn" or args.arch == "deepmir_resnet_bn_v2":
-            if int(layer) == 1:
-                model.bn1.register_forward_hook(hook)
-            elif int(layer) == 2:
-                model.bn2.register_forward_hook(hook)
-            elif int(layer) == 3:
-                model.bn3.register_forward_hook(hook)
+            if layer == 1:
+                model.relu3.register_forward_hook(hook)
+            elif layer == 2:
+                model.relu6.register_forward_hook(hook)
+            elif layer == 3:
+                model.relu9.register_forward_hook(hook)
 
-        for i, (input_tensor, _, path) in enumerate(val_loader):
+        for i, (input_tensor, _, path) in enumerate(test_loader):
             input_var = torch.autograd.Variable(input_tensor)
             model(input_var)
-            if i == 50:
-                break
+            # # only go over the first 50 images of the test/validation test
+            # if i == 50:
+            #     break
         activation = np.vstack(outputs)
+        # normalize the activations
         activation -= activation.mean(0)
         activation = activation / activation.std(0)
+        # compute the correlation by taking the dot product between different activations
         Sigma = np.dot(activation.transpose((1, 0)), activation) / activation.shape[0]
+        # convert all empty and inf values to 0
         Sigma = np.nan_to_num(Sigma, nan=0, posinf=0, neginf=0)
         plt.figure()
+        # take the absolute values of the correlations and plot them in a heatmap
         sns.heatmap(np.abs(Sigma), cmap='hot')
         plt.tight_layout()
         plt.savefig(dst + str(layer) + 'BN.jpg')
@@ -1162,13 +1109,20 @@ def plot_correlation_BN(args, val_loader, model, layer):
         return mean_corr
 
 
-def concept_permutation_importance(args, val_loader, layer, criterion, arch='resnet_cw', num_concepts=7, model=None):
+def concept_permutation_importance(args, test_loader, layer, criterion, num_concepts=7, model=None):
     """
-    Will compute the concept importance of the top {num_concepts} concepts in the given layer
+    :param args: arguments given by user
+    :param test_loader: data loader containing the validation/test images
+    :param layer: whitened layer
+    :param criterion: loss function
+    :param num_concepts: number of concepts
+    :param model: trained model
+    :return: Will compute the concept importance of the top {num_concepts} concepts in the given layer
     """
     permutation_loss = []  # permutation_loss[i] represents the loss obtained when concept i is shuffled
     permutation_accuracy = []
 
+    # create directory where plot and values will be stored
     dst = './plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/'
     dst = dst + 'importance_classifier/'
     if not os.path.exists(dst):
@@ -1177,15 +1131,14 @@ def concept_permutation_importance(args, val_loader, layer, criterion, arch='res
     with torch.no_grad():
         model.eval()
         model = model.module
-
         if args.arch == "resnet_cw":
             layers = model.layers
-
         model = model.model
 
         loss_avg = AverageMeter()
         accuracy_avg = AverageMeter()
-        for i, (input, target) in enumerate(val_loader):
+        # first compute the accuracy and loss for the model trained how it is (without shuffling the concept axes)
+        for i, (input, target) in enumerate(test_loader):
             input_var = torch.autograd.Variable(input)
             target_var = torch.autograd.Variable(target)
 
@@ -1200,11 +1153,21 @@ def concept_permutation_importance(args, val_loader, layer, criterion, arch='res
         print('base loss', base_loss)
         base_accuracy = accuracy_avg.avg
 
+        # compute the accuracy and loss while shuffling the concept axes (permuting), this will recover the importance
+        # of a concept
         for axis_to_permute in range(num_concepts):
             loss_avg = AverageMeter()
             accuracy_avg = AverageMeter()
 
             def hook(module, input, output):
+                """
+                :param module: layer module
+                :param input: input of layer
+                :param output: output of layer
+                :return: output values (i.e. activations) of layer of interest appended to outputs list. NOTE: to use
+                this function, the batch size should be > 1 as the batch size size is used to define the switching
+                of axes!
+                """
                 batch_size = output.size()[0]
                 idx = list(range(batch_size))
                 random.shuffle(idx)
@@ -1225,14 +1188,14 @@ def concept_permutation_importance(args, val_loader, layer, criterion, arch='res
             elif args.arch == "deepmir_cw_bn":
                 model.features[layer - 1].register_forward_hook(hook)
             elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
-                if int(layer) == 1:
-                    model.bn1.register_forward_hook(hook)
-                elif int(layer) == 2:
-                    model.bn2.register_forward_hook(hook)
-                elif int(layer) == 3:
-                    model.bn3.register_forward_hook(hook)
+                if layer == 1:
+                    model.relu3.register_forward_hook(hook)
+                elif layer == 2:
+                    model.relu6.register_forward_hook(hook)
+                elif layer == 3:
+                    model.relu9.register_forward_hook(hook)
 
-            for i, (input, target) in enumerate(val_loader):
+            for i, (input, target) in enumerate(test_loader):
                 input_var = torch.autograd.Variable(input)
                 target_var = torch.autograd.Variable(target)
 
@@ -1270,12 +1233,21 @@ def concept_permutation_importance(args, val_loader, layer, criterion, arch='res
     plt.savefig(dst + 'concept_importance_classifier' + str(layer) + '.jpg')
 
 
-def concept_gradient_importance(args, val_loader, layer, arch='resnet_cw', num_classes=2):
+def concept_gradient_importance(args, test_loader, layer, num_classes=2):
+    """
+    :param args: arguments given by user
+    :param test_loader: data loader containing the validation/test images
+    :param layer: whitened layer
+    :param num_classes: number of unique classes in the dataset
+    :return: concept importance based on the sign of the gradient at the whitened layer of an image. Note: this function
+    does an extra backward pass on the model, but requires a batch size of 1. Hence, the batch norm values are adjusted
+    based on one instance of the test/validation set.
+    """
     model = None
     if args.arch == "deepmir_resnet_cw_v2":
         model = load_deepmir_resnet_cw_v2_model(args, checkpoint_folder="./checkpoints",
                                                 whitened_layer=args.whitened_layers, fold_n=args.foldn_bestmodel)
-
+    # create directory to store the plot and values
     dst = './plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/'
     if not os.path.exists(dst):
         os.mkdir(dst)
@@ -1284,16 +1256,22 @@ def concept_gradient_importance(args, val_loader, layer, arch='resnet_cw', num_c
         os.mkdir(dst)
 
     model = model.module
-
     if args.arch == "resnet_cw":
         layers = model.layers
     model = model.model
 
     outputs = []
 
-    def hook(module, grad_input, grad_output):
-        outputs.append(grad_input[0])
+    def hook(module, input, output):
+        """
+        :param module: layer module
+        :param input: input of layer
+        :param output: output of layer
+        :return: output values (i.e. activations) of layer of interest appended to outputs list
+        """
+        outputs.append(input[0])
 
+    # append hooks to the whitening layers
     layer = int(layer)
     if args.arch == "resnet_cw":
         if layer <= layers[0]:
@@ -1321,23 +1299,29 @@ def concept_gradient_importance(args, val_loader, layer, arch='resnet_cw', num_c
         elif layer == 3:
             model.relu9.register_backward_hook(hook)
 
+    # initialize empty lists where the concept importances will be stored
     class_count = [0] * num_classes
     concept_importance_per_class = [None] * num_classes
 
-    dir_deriv_signs = []
-    for i, (input_img, target) in enumerate(val_loader):
-        sample_fname, _ = val_loader.dataset.samples[i]
+    # dir_deriv_signs = []
+    # go over all images in the test set, get the gradient for the image just before the CW layer. The value of this
+    # gradient at a concept neuron will determine the importance. In case the value is 0, going in the direction
+    # of this neuron will decrease the loss, and vice versa. We use 0 instead of a negative value because we have
+    # applied ReLU, which will cause all negative values to become 0.
+    for i, (input_img, target) in enumerate(test_loader):
+        sample_fname, _ = test_loader.dataset.samples[i]
         input_var = torch.autograd.Variable(input_img)
         output = model(input_var)
         model.zero_grad()
         prediction_result = torch.argmax(output, dim=1).flatten().tolist()[0]
+        # increment the class count based on whether the prediction value (class 0 or class 1)
         class_count[prediction_result] += 1
         output[:, prediction_result].backward()
         # in resnet this is outputs[1] due to the structure (first the conv gradients and then the relu ones)
         directional_derivatives = outputs[0].mean(dim=1).flatten()
         directional_derivatives = directional_derivatives.detach().numpy()
         is_positive = (directional_derivatives > 0).astype(np.int64)
-        dir_deriv_signs.append((directional_derivatives > 0).astype(np.int64))
+        # dir_deriv_signs.append((directional_derivatives > 0).astype(np.int64))
         if concept_importance_per_class[prediction_result] is None:
             concept_importance_per_class[prediction_result] = is_positive
         else:
@@ -1349,14 +1333,16 @@ def concept_gradient_importance(args, val_loader, layer, arch='resnet_cw', num_c
             print(f'empty concept importance for class {i}')
             print(concept_importance_per_class[i])
         else:
+            # divide the importance by the number of instances predicted to be a certain class
             concept_importance_per_class[i] = concept_importance_per_class[i].astype(np.float32)
             concept_importance_per_class[i] /= class_count[i]
             print(concept_importance_per_class[i])
             print(concept_importance_per_class[i].mean())
 
     np.save(os.path.join(dst, f'concept_importance_targets_{str(layer)}'), concept_importance_per_class)
-    np.save(os.path.join(dst, f'concept_dir_deriv_signs_targets_{str(layer)}'), dir_deriv_signs)
+    # np.save(os.path.join(dst, f'concept_dir_deriv_signs_targets_{str(layer)}'), dir_deriv_signs)
 
+    # create a bar plot showing the concept importances per class
     labels = ['0', '1']
     concepts = args.concepts.split(',')
     x = np.arange(len(labels))  # the label locations
@@ -1375,26 +1361,29 @@ def concept_gradient_importance(args, val_loader, layer, arch='resnet_cw', num_c
     plt.show()
     plt.savefig(dst + 'concept_importance_targets' + str(layer) + '.jpg')
 
-    neurons = list(concept_importance_per_class[0])
-    neurons_name = [str(i) for i in range(len(neurons))]
-    width = 0.05  # the width of the bars
-    for i in range(len(neurons)):
-        concept1 = [list(concept_importance_per_class[0])[i], list(concept_importance_per_class[1])[i]]
-        plt.bar(x + i * width, concept1, width)
-
-    # Add some text for labels, title and custom x-axis tick labels, etc.
-    plt.ylabel('Concept Importance')
-    plt.xlabel('Target Class')
-    plt.xticks(x, labels)
-    plt.legend(neurons_name, bbox_to_anchor=(1.05, 0.6))
-    plt.tight_layout()
-    plt.show()
-    plt.savefig(dst + 'concept_importance_targets_allneurons' + str(layer) + '.jpg')
+    # neurons = list(concept_importance_per_class[0])
+    # neurons_name = [str(i) for i in range(len(neurons))]
+    # width = 0.05  # the width of the bars
+    # for i in range(len(neurons)):
+    #     concept1 = [list(concept_importance_per_class[0])[i], list(concept_importance_per_class[1])[i]]
+    #     plt.bar(x + i * width, concept1, width)
+    #
+    # # Add some text for labels, title and custom x-axis tick labels, etc.
+    # plt.ylabel('Concept Importance')
+    # plt.xlabel('Target Class')
+    # plt.xticks(x, labels)
+    # plt.legend(neurons_name, bbox_to_anchor=(1.05, 0.6))
+    # plt.tight_layout()
+    # plt.show()
+    # plt.savefig(dst + 'concept_importance_targets_allneurons' + str(layer) + '.jpg')
 
     return concept_importance_per_class
 
 
-def saliency_map_class(args, val_loader, layer, arch='resnet_cw', dataset='isic'):
+def saliency_map_class(args, test_loader, layer, arch='resnet_cw', dataset='isic'):
+    """
+
+    """
     dst = './plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + str(args.depth) + '/saliency_map/'
     # dst = '/usr/xtmp/zhichen/temp_plots/'
     try:
@@ -1408,7 +1397,7 @@ def saliency_map_class(args, val_loader, layer, arch='resnet_cw', dataset='isic'
     if args.arch == "resnet_cw":
         model = model.model
 
-    for i, (input_img, target) in enumerate(val_loader):
+    for i, (input_img, target) in enumerate(test_loader):
         input_var = torch.autograd.Variable(input_img).cuda()
         target_var = torch.autograd.Variable(target).cuda()
         input_var.requires_grad = True
@@ -1486,7 +1475,16 @@ def saliency_map_concept(args, val_loader, layer, arch='resnet_cw', dataset='isi
             outputs = []
 
 
-def saliency_map_concept_cover(args, val_loader, layer, arch='resnet_cw', dataset='isic', num_concepts=7, model=None):
+def saliency_map_concept_cover(args, layer,  num_concepts=7, model=None):
+    """
+    :param args: arguments given by user
+    :param layer: whitened layer
+    :param num_concepts: number of concepts
+    :param model: trained model
+    :return: images in test set with receptive field of concept is plotted over original image. This shows for all
+    test images where the neuron that has been aligned with a concept looks at
+    """
+    # create directory that will store the plots
     dst = './plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/saliency_map_concept_cover/'
     try:
         os.mkdir(dst)
@@ -1502,8 +1500,15 @@ def saliency_map_concept_cover(args, val_loader, layer, arch='resnet_cw', datase
     outputs = []
 
     def hook(module, input, output):
+        """
+        :param module: layer module
+        :param input: input of layer
+        :param output: output of layer
+        :return: output values (i.e. activations) of layer of interest appended to outputs list
+        """
         outputs.append(output)
 
+    # append hooks to the whitened layers
     layer = int(layer)
     if args.arch == "resnet_cw":
         if layer <= layers[0]:
@@ -1515,23 +1520,24 @@ def saliency_map_concept_cover(args, val_loader, layer, arch='resnet_cw', datase
         elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
             model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
     elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
-        if int(layer) == 1:
+        if layer == 1:
             model.bn1.register_forward_hook(hook)
-        elif int(layer) == 2:
+        elif layer == 2:
             model.bn2.register_forward_hook(hook)
-        elif int(layer) == 3:
+        elif layer == 3:
             model.bn3.register_forward_hook(hook)
 
+    # create a folder for each concept that will store the plots
     for j in range(num_concepts):
-        save_folder = os.path.join(dst, "concept_" + str(j))
-        try:
-            os.mkdir(save_folder)
-        except:
-            pass
+        if not os.path.exists(os.path.join(dst, "concept_" + str(j))):
+            os.mkdir(os.path.join(dst, "concept_" + str(j)))
 
+    # start with an initialization of the size of the concept cover, since we have images of 25x100, we want the cover
+    # not to exceed these sizes
     cover_size = 12
     with torch.no_grad():
-        # for i, (input, _, path) in enumerate(val_loader):
+        # create a data loader that will go over the 50 most activated images per concept, these are the most
+        # interesting in my opinion
         base_dir = 'plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/' + \
                    '_'.join(args.whitened_layers) + '_rot_cw/'
         most_activated_img_loader = torch.utils.data.DataLoader(
@@ -1541,9 +1547,11 @@ def saliency_map_concept_cover(args, val_loader, layer, arch='resnet_cw', datase
             batch_size=1, shuffle=False, num_workers=args.workers, pin_memory=False)
 
         for i, (input, _, path) in enumerate(most_activated_img_loader):
+            # create a random patch, based on the initialized cover size and the fact that it is an RGB image (3 dim)
             random_patch = torch.tensor(np.random.normal(size=(3, cover_size, cover_size)))
             input_var = torch.autograd.Variable(input)
             output = model(input_var)
+            # get the activation values of the input image from the output at the cw layer
             base_activations = F.max_pool2d(outputs[0], kernel_size=2, stride=1)
             base_activations = base_activations[0, :, :, :].clamp(min=0.0).mean(dim=(1, 2))
             outputs = []
@@ -1595,7 +1603,7 @@ def saliency_map_concept_cover(args, val_loader, layer, arch='resnet_cw', datase
                 print("saved: " + str(j))
 
 
-def saliency_map_concept_cover_2(args, val_loader, layer, arch='resnet_cw', dataset='isic', num_concepts=7, model=None):
+def saliency_map_concept_cover_2(args, test_loader, layer, arch='resnet_cw', dataset='isic', num_concepts=7, model=None):
     dst = './plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/saliency_map_concept_cover/'
     try:
         os.mkdir(dst)
@@ -1640,7 +1648,7 @@ def saliency_map_concept_cover_2(args, val_loader, layer, arch='resnet_cw', data
 
     cover_size = 6
     with torch.no_grad():
-        for i, (input, target) in enumerate(val_loader):
+        for i, (input, target) in enumerate(test_loader):
             random_patch = torch.tensor(np.random.normal(size=(3, cover_size, cover_size)))
             input_var = torch.autograd.Variable(input)
             output = model(input_var)
@@ -1688,7 +1696,7 @@ def saliency_map_concept_cover_2(args, val_loader, layer, arch='resnet_cw', data
                 print("saved: " + str(j))
 
 
-def get_activations_finalpart(args, val_loader, model, layer):
+def get_activations_finalpart(args, test_loader, model, layer):
     """ function that saves all activations of the relu layer after the CW layer and the activations of linear1"""
 
     with torch.no_grad():
@@ -1735,10 +1743,11 @@ def get_activations_finalpart(args, val_loader, model, layer):
             model.relu10.register_forward_hook(hook_linear1)
             # model.linear1.register_forward_hook(hook_linear1_beforerelu)
 
-        for k in range(0, 1):
+        # change this range to be 0, len(neurons cw layer)
+        for k in range(0, 72):
             paths = []
             vals = None
-            for i, (input_tensor, _, path) in enumerate(val_loader):
+            for i, (input_tensor, _, path) in enumerate(test_loader):
                 paths += list(path)
                 input_var = torch.autograd.Variable(input_tensor)
                 outputs_relucw = []
@@ -1771,9 +1780,9 @@ def get_activations_finalpart(args, val_loader, model, layer):
                 else:
                     vals = np.concatenate((vals, val), 1)
 
-                # save the activations as numpy arrays
-                arr = list(zip(list(vals), list(paths)))
-                np.save(os.path.join(dst, f'activations_relu_cwlayer{layer}_neuron{k}'), arr)
+            # save the activations as numpy arrays
+            arr = list(zip(vals[0], list(paths)))
+            np.save(os.path.join(dst, f'activations_relu_cwlayer{layer}_neuron{k}'), arr)
 
         activation_relulinear1 = np.vstack(outputs_linear1)
         # input_act_linear1 = np.vstack(inputs_linear1)
