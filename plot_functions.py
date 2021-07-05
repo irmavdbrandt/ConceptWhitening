@@ -16,7 +16,11 @@ from shutil import copyfile
 from MODELS.iterative_normalization import iterative_normalization_py
 from MODELS.model_resnet import *
 from train_places import AverageMeter, accuracy
-
+from sklearn import tree
+from scipy.special import softmax
+import graphviz
+import os
+import pandas as pd
 
 np.seterr(divide='ignore', invalid='ignore')
 
@@ -1789,6 +1793,138 @@ def get_activations_finalpart(args, test_loader, model, layer):
 
         np.save(os.path.join(dst, f'activations_relulinear1'), activation_relulinear1)
         # np.save(os.path.join(dst, f'input_act_linear1'), input_act_linear1)
+
+
+def tree_explainer(cpt=None, arch="deepmir_resnet_cw_v2", layer="3", learnable_cpt=None):
+    """
+    :param cpt:
+    :param arch:
+    :param layer:
+    :param learnable_cpt:
+    :return:
+    """
+    # create a sorted lists of all concepts of interest
+    concepts = cpt.split(',')
+    # create a string of the concepts by joining them with an underscore (this is also how they are saved)
+    concepts_string = '_'.join(concepts)
+
+    # base folder where activations of model of interest are stored
+    base_folder = f'./plot/{concepts_string}/{arch}/activations'
+
+    # get the index of the neurons that have learned a concept (high AUC...)
+    learnable_cpt_neuron_indices = [concepts.index(concept) for concept in learnable_cpt]
+
+    # initialize an empty list that will store the activations of the test images on the concept neurons
+    activations_allconcepts = []
+    for neuron_index in learnable_cpt_neuron_indices:
+        # create the complete file name where the activations for a certain neuron are stored
+        file_name = f'activations_relu_cwlayer{layer}_neuron{neuron_index}.npy'
+        # load the activations
+        file = np.load(os.path.join(base_folder, file_name))
+
+        # initialize an empty list that will store the concept activation values for 1 concept
+        activations_neuron = []
+        for i in range(len(file)):
+            value = float(file[i][0])  # convert from string to float, the act value is stored first, the path second
+            activations_neuron.append(value)
+        # add the activations from 1 neuron to the list with all activations
+        activations_allconcepts.append(activations_neuron)
+
+    # create bins for the data based on the 25th, 50th, 75th, and 100th percentile of the activation values for each
+    # concept
+    binned_act_values = []
+    for i in range(len(learnable_cpt_neuron_indices)):
+        stats_concept = pd.Series(activations_allconcepts[i]).describe()
+        concept_25 = stats_concept.T['25%']
+        concept_50 = stats_concept.T['50%']
+        concept_75 = stats_concept.T['75%']
+        concept_100 = stats_concept.T['max']
+
+        bins_concept = [concept_25, concept_50, concept_75, concept_100]
+        binned_values_concept = np.digitize(activations_allconcepts[i], bins_concept)
+        binned_act_values.append(binned_values_concept)
+
+    # create the feature matrix X for the decision tree containing the binned act values for the concepts of interest
+    X = np.array(binned_act_values)
+    # transpose the rows and columns in X to match the requirements of the decision tree
+    X = np.transpose(np.asarray(X))
+
+    # create the targets y, which are in my case the prediction outcomes
+    # the test predictions are in the same order as the test data (test loader model is without shuffling)
+    y = np.load(f'./output/{concepts_string}.npy')
+    # apply softmax (pytorch Crossentropy() does this and this has not yet been done on the saved predictions)
+    y = softmax(y, axis=2)
+    y = np.argmax(y, axis=2)
+    y = y.flatten()
+
+    # initiate the classifier itself using the X and y matrices
+    clf = tree.DecisionTreeClassifier(random_state=2)
+    clf = clf.fit(X, y)
+    tree.plot_tree(clf)
+    plt.show()
+
+    # obtain feature names for the tree, which are the concept names with predicted_similarity in front of them
+    feature_names = []
+    for concept in learnable_cpt:
+        feature_name_concept = f"predicted_similarity_{concept}"
+        feature_names.append(feature_name_concept)
+
+    # create a nice formatting of the tree
+    dot_data = tree.export_graphviz(clf, out_file=None,
+                                    feature_names=feature_names,
+                                    class_names=np.unique(y).astype(str),
+                                    filled=True, rounded=True, proportion=True,
+                                    special_characters=True)
+
+    # piece of code to add True/False to each edge, instead of just the first 2
+    # first find the lowest node number (last in the string)
+    lowest_node = dot_data[-6:-3]  # this is the case when this index is an integer with two numbers
+    lowest_node = int(lowest_node)
+    # check whether this node is an integer
+    if lowest_node in range(0, 100):
+        for i in range(0, lowest_node):
+            for j in range(i + 1, lowest_node + 1):
+                index = dot_data.find(f'{str(i)} -> {str(j)} ;')
+                if index == -1:
+                    continue
+                else:
+                    if j == i + 1:
+                        if (len(str(i)) == 2) and (len(str(j)) == 2):
+                            dot_data = dot_data[:index + 8] + ' [labeldistance=2.5, labelangle=45, headlabel="True"]' + \
+                                       dot_data[index + 8:]
+                        elif len(str(i)) == 2:
+                            dot_data = dot_data[:index + 7] + ' [labeldistance=2.5, labelangle=45, headlabel="True"]' + \
+                                       dot_data[index + 7:]
+                        elif len(str(j)) == 2:
+                            dot_data = dot_data[:index + 7] + ' [labeldistance=2.5, labelangle=45, headlabel="True"]' + \
+                                       dot_data[index + 7:]
+                        else:
+                            dot_data = dot_data[:index + 6] + ' [labeldistance=2.5, labelangle=45, headlabel="True"]' + \
+                                       dot_data[index + 6:]
+    if lowest_node in range(0, 100):
+        for i in range(0, lowest_node):
+            for j in range(i + 1, lowest_node + 1):
+                index = dot_data.find(f'{str(i)} -> {str(j)} ;')
+                if index == -1:
+                    continue
+                else:
+                    if (len(str(i)) == 2) and (len(str(j)) == 2):
+                        dot_data = dot_data[:index + 8] + ' [labeldistance=2.5, labelangle=-75, headlabel="False"]' + \
+                                   dot_data[index + 8:]
+                    elif len(str(i)) == 2:
+                        dot_data = dot_data[:index + 7] + ' [labeldistance=2.5, labelangle=-75, headlabel="False"]' + \
+                                   dot_data[index + 7:]
+                    elif len(str(j)) == 2:
+                        dot_data = dot_data[:index + 7] + ' [labeldistance=2.5, labelangle=-75, headlabel="False"]' + \
+                                   dot_data[index + 7:]
+                    else:
+                        dot_data = dot_data[:index + 6] + ' [labeldistance=2.5, labelangle=-75, headlabel="False"]' + \
+                                   dot_data[index + 6:]
+
+    # create a graph of the tree
+    graph = graphviz.Source(dot_data)
+    # render the graph and save it as premirna.pdf
+    graph.render("premirna")
 
 
 def load_resnet_model(args, checkpoint_folder="./checkpoints", whitened_layer=None):
