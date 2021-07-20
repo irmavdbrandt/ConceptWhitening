@@ -40,7 +40,7 @@ parser.add_argument('--print-freq', '-p', default=10, type=int, metavar='N', hel
 parser.add_argument('--resume', default='', type=str, metavar='PATH', help='path to latest checkpoint (default: none)')
 parser.add_argument("--seed", type=int, default=1234, metavar='BS', help='input batch size for training (default: 64)')
 parser.add_argument("--prefix", type=str, required=True, metavar='PFX', help='prefix for logging & checkpoint saving')
-parser.add_argument('--evaluate', dest='evaluate', action='store_true', help='evaluation only')
+parser.add_argument('--type_training', type=str, dest='type_training', help='which type of training is wanted')
 parser.add_argument('--foldn_bestmodel', type=str, default=0, help='fold number that gave best results during training')
 
 os.chdir(sys.path[0])
@@ -57,11 +57,12 @@ def main():
 
     # define loss function (criterion)
     criterion = nn.CrossEntropyLoss()
+    # criterion = nn.BCELoss()
 
     # training initialization
-    if not args.evaluate:
+    if args.type_training != 'evaluate':
         # if not in CW mode, we dont want 5-fold cv
-        if args.arch == "deepmir_resnet_bn_v2":
+        if args.type_training == "finetune" or args.type_training == "pretrain":
             model = None
             if args.arch == "deepmir_resnet_bn":
                 model = DeepMirResNetBN(args, model_file='checkpoints/resnet_premirna_checkpoints/DEEPMIR_RESNET_'
@@ -69,6 +70,16 @@ def main():
             elif args.arch == 'deepmir_resnet_bn_v2':
                 model = DeepMirResNetBNv2(args, model_file='checkpoints/resnet_deepmir_v2/DEEPMIR_RESNET_PREMIRNA_v2_'
                                                            'pretrain_BN_1_checkpoint.pth.tar')
+            elif args.arch == 'deepmir_resnet_bn_v3':
+                if args.type_training == 'finetune':
+                    # if data is modhsa_original, we are fine-tuning a model so we need pretrained weights from
+                    # another dataset
+                    model = DeepMirResNetBNv3(args, model_file='checkpoints/presence_terminal_loop/DEEPMIR_RESNET_'
+                                                               'PREMIRNA_v3_BN_final_1_foldnNone_checkpoint.pth.tar')
+                else:
+                    # if data not modhsa_original, we are pretraining with the modmirbase data and we do not want
+                    # pretrained weights
+                    model = DeepMirResNetBNv3(args, model_file=None)
 
             # define optimizer
             optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum,
@@ -84,27 +95,29 @@ def main():
 
             # create path links to data directories
             traindir = os.path.join(args.data, 'train')
-            testdir = os.path.join(args.data, 'test')
+            test_loader = None
+            if args.type_training == 'finetune':
+                testdir = os.path.join(args.data, 'test')
+                # create balanced data loader for the test set using class weights calculated on the test set
+                test_loader = torch.utils.data.DataLoader(
+                    datasets.ImageFolder(testdir, transforms.Compose([
+                        transforms.ToTensor(),
+                    ])),
+                    batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
 
             # create a balanced data loader for the training set using class weights calculated on the training set
-            train_loader = balanced_data_loader(args, traindir)
-
-            # create balanced data loader for the test set using class weights calculated on the test set
-            test_loader = torch.utils.data.DataLoader(
-                datasets.ImageFolder(testdir, transforms.Compose([
-                    transforms.ToTensor(),
-                ])),
-                batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
+            train_loader = balanced_data_loader(args, traindir, paths=False)
 
             best_prec1 = 0
-            train_loss = None
-            train_acc = None
             for epoch in range(args.start_epoch, args.start_epoch + args.epochs):
-                if args.arch == "resnet_baseline" or args.arch == "deepmir_resnet_bn_v2":
-                    train_loss, train_acc = train_baseline(train_loader, model, criterion, optimizer, epoch)
+                train_loss, train_acc = train_baseline(train_loader, model, criterion, optimizer, epoch)
 
                 # evaluate on validation set
-                val_loss, prec1 = validate(test_loader, model, criterion)
+                if args.type_training == 'finetune':
+                    prec1, val_loss = validate(test_loader, model, criterion)
+                else:
+                    # evaluate on the training set because we do not have a test set
+                    prec1, val_loss = validate(train_loader, model, criterion)
 
                 # neptune logging metrics
                 # Log epoch loss
@@ -133,7 +146,7 @@ def main():
             # stop the neptune logging
             run.stop()
 
-        else:
+        elif args.type_training == 'cw':
             train_accuracies = []
             val_accuracies = []
             correlations = []
@@ -164,10 +177,16 @@ def main():
                     model = DeepMirResNetTransfer(args, [int(x) for x in args.whitened_layers.split(',')],
                                                   model_file='checkpoints/DEEPMIR_RESNET_PREMIRNA_BN_2_checkpoint.pth'
                                                              '.tar')
+                elif args.arch == "deepmir_resnet_cw_v3":
+                    model = DeepMirResNetTransferv3(args, [int(x) for x in args.whitened_layers.split(',')],
+                                                    # model_file='checkpoints/presence_terminal_loop/DEEPMIR_RESNET_'
+                                                    #            'PREMIRNA_v3_BN_noextralinear_oneoutput_1_foldnNone_'
+                                                    #            'model_best.pth.tar')
+                                                    model_file='checkpoints/presence_terminal_loop/DEEPMIR_RESNET_'
+                                                               'PREMIRNA_v3_BN_final_model_best.pth.tar')
 
                 # define optimizer
-                optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum,
-                                            weight_decay=args.weight_decay)
+                optimizer = torch.optim.Adam(model.parameters(), args.lr)
                 model = torch.nn.DataParallel(model)
                 print('Model architecture: ', model)
                 print(f'Number of model parameters: {sum([p.data.nelement() for p in model.parameters()])}')
@@ -182,7 +201,10 @@ def main():
                 conceptdir_train = os.path.join(args.data, f'concept_train_fold{fold}')
 
                 # create a balanced data loader for the training set using class weights calculated on the training set
-                train_loader = balanced_data_loader(args, traindir)
+                train_loader = balanced_data_loader(args, traindir, paths=False)
+
+                # create another data loader for the test set that includes the image paths
+                train_loader_with_path = balanced_data_loader(args, traindir, paths=True)
 
                 # initialize the concept data loader
                 concept_loaders = [
@@ -222,6 +244,11 @@ def main():
                 val_losses = []
                 train_acc = None
                 val_acc = None
+
+                n_epochs_stop = 10
+                epochs_no_improve = 0
+                min_val_loss = np.Inf
+
                 for epoch in range(args.start_epoch, args.start_epoch + args.epochs):
                     adjust_learning_rate(args, optimizer, epoch)
                     # train for one epoch
@@ -246,7 +273,7 @@ def main():
                     best_prec1 = max(val_acc, best_prec1)
                     # do not save models before the first 10 epochs (these models tend to not yet have learned any
                     # concepts but do have high accuracy due to the use of pretraining weights)
-                    if epoch < 11:
+                    if epoch < args.start_epoch + 5:
                         continue
                     else:
                         save_checkpoint({
@@ -260,12 +287,21 @@ def main():
                     print('Best accuracy so far: ', best_prec1)
                     print('Accuracy current fold: ', val_acc)
 
-                    # add early stopping criteria: if the loss on the validation set has not improved over the last 5
+                    # add early stopping criteria: if the loss on the validation set has not improved over the last 10
                     # epochs, stop the training
-                    if len(val_losses) > 5:
-                        if val_losses[-1] > val_losses[-5]:
-                            print('validation loss not decreased over 5 epochs')
-                            break
+                    if val_loss < min_val_loss:
+                        epochs_no_improve = 0
+                        min_val_loss = val_loss
+
+                    else:
+                        epochs_no_improve += 1
+
+                    if epoch > args.start_epoch + 10 and epochs_no_improve == n_epochs_stop:
+                        print('Early stopping!')
+                        print('validation loss not decreased over 20 epochs')
+                        break
+                    else:
+                        continue
 
                 train_accuracies.append(train_acc)
                 val_accuracies.append(val_acc)
@@ -288,7 +324,7 @@ def main():
                 if not os.path.exists(dir_fold):
                     os.mkdir(dir_fold)
                 mean_correlation = plot_correlation(args, val_loader_with_path, model, layer=args.whitened_layers,
-                                                    evaluate=args.evaluate, fold=str(fold))
+                                                    evaluate=args.type_training, fold=str(fold))
                 # Neptune logging: log decorrelation of trained model on fold x
                 run[f"validation/correlation"].log(mean_correlation)
 
@@ -299,14 +335,17 @@ def main():
 
                 print("Plot top50 activated images")
                 plot_concept_top50(args, val_loader_with_path, model, args.whitened_layers, False,
-                                   activation_mode=args.act_mode, evaluate=args.evaluate, fold=str(fold))
-                plot_top10(args, plot_cpt=args.concepts.split(','), layer=args.whitened_layers, evaluate=args.evaluate,
+                                   activation_mode=args.act_mode, evaluate=args.type_training, fold=str(fold))
+                plot_top10(args, plot_cpt=args.concepts.split(','), layer=args.whitened_layers, evaluate=args.type_training,
                            fold=str(fold))
+                # # todo: get activations for the complete training set on the best fold model
+                # print("Get concept activation values")
+                # get_activations_finalpart(args, train_loader_with_path, model, args.whitened_layers)
 
             # stop the neptune logging
             run.stop()
 
-    else:
+    elif args.type_training == 'evaluate':
         # create path links to data directories
         testdir = os.path.join(args.data, 'test')
         conceptdir_test = os.path.join(args.data, 'concept_test')
@@ -335,6 +374,10 @@ def main():
         elif args.arch == "deepmir_resnet_cw_v2":
             model = load_deepmir_resnet_cw_v2_model(args, checkpoint_folder="./checkpoints",
                                                     whitened_layer=args.whitened_layers, fold_n=args.foldn_bestmodel)
+        elif args.arch == "deepmir_resnet_cw_v3":
+            model = load_deepmir_resnet_cw_v3_model(args, checkpoint_folder="./checkpoints",
+                                                    whitened_layer=args.whitened_layers, fold_n=args.foldn_bestmodel,
+                                                    checkpoint_name=args.resume)
         elif args.arch == "deepmir_resnet_bn_v2":
             model = load_deepmir_resnet_v2_bn_model(args, whitened_layer=args.whitened_layers)
 
@@ -346,25 +389,26 @@ def main():
         print("Start testing")
         validate(test_loader, model, criterion)
         print("Save activations relu after cw layer and relu after linear1")
-        get_activations_finalpart(args, test_loader_with_path, model, args.whitened_layers)
+        # get_activations_finalpart(args, test_loader_with_path, model, args.whitened_layers)
         plot_figures(args, model, test_loader_with_path, conceptdir_test, test_loader, criterion)
+        #
+        # print("Plot tree showing the activations of the concepts for the test images")
+        # # todo: try to automate the learnable concepts part by using the AUC thresholds or something
+        # tree_explainer(cpt=args.concepts, arch=args.arch, layer=args.whitened_layers,
+        #                learnable_cpt=["large_asymmetric_bulge", "base_pairs_wobbles_in_stem"])
+        #
+        # print("Concept importance for targets")
+        # # CAREFUL: only call this function when loading the model inside the function or after the other testing,
+        # # otherwise the model that is used for the other testing is altered due to the extra backward pass done in this
+        # # function for computing the gradients of the concept vectors
+        # if len(args.whitened_layers) > 1:
+        #     whitened_layers = [int(x) for x in args.whitened_layers.split(',')]
+        #     for layer in whitened_layers:
+        #         concept_gradient_importance(args, test_loader, layer, num_classes=2)
+        # else:
+        #
+        #     concept_gradient_importance(args, test_loader, layer=args.whitened_layers, num_classes=2)
 
-        print("Plot tree showing the activations of the concepts for the test images")
-        # todo: try to automate the learnable concepts part by using the AUC thresholds or something
-        tree_explainer(cpt=args.concepts, arch=args.arch, layer=args.whitened_layers,
-                       learnable_cpt=["largest_asymmetric_bulge", "base_pairs_wobbles_in_stem"])
-
-        print("Concept importance for targets")
-        # CAREFUL: only call this function after the other testing, since it does an extra backward pass using the test
-        # set. Since the BS in the test set is 1, the batch norm weights are altered based on this one instance (which
-        # can have a large (detrimental) effect on the model performance)
-        if len(args.whitened_layers) > 1:
-            whitened_layers = [int(x) for x in args.whitened_layers.split(',')]
-            for layer in whitened_layers:
-                concept_gradient_importance(args, test_loader, layer, num_classes=2)
-        else:
-
-            concept_gradient_importance(args, test_loader, layer=args.whitened_layers, num_classes=2)
         #
         # don't know what to do with the function below?
         # get_representation_distance_to_center(args, test_loader, args.whitened_layers, arch='deepmir_resnet_cw',
@@ -416,6 +460,10 @@ def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
         input_var = torch.autograd.Variable(input_img)
         target_var = torch.autograd.Variable(target)
         output = model(input_var)  # compute model output
+        # # added these lines in my new model with only 1 neuron
+        # target_var = target_var.unsqueeze(1)
+        # target_var = target_var.float()
+        # ###########
         loss = criterion(output, target_var)  # update the loss function
         # measure accuracy and record loss
         [prec1] = accuracy(output.data, target, topk=(1,))
@@ -466,8 +514,12 @@ def validate(test_loader, model, criterion):
             target_var = torch.autograd.Variable(target)
             output = model(input_var)  # compute model output
             # save the predictions in case we are dealing with the test set (they are used for explainability)
-            if args.evaluate:
+            if args.type_training == 'evaluate':
                 predictions.append(output.data.detach().numpy())
+            # # added these lines in my new model with only 1 neuron
+            # target_var = target_var.unsqueeze(1)
+            # target_var = target_var.float()
+            # ###########
             loss = criterion(output, target_var)  # update the loss function
             # measure accuracy and record loss
             [prec1] = accuracy(output.data, target, topk=(1,))
@@ -487,11 +539,11 @@ def validate(test_loader, model, criterion):
     print(' * Prec@1 {top1.avg:.3f}'.format(top1=top1))
 
     # save the predictions in case we are dealing with the test set (they are used for explainability)
-    if args.evaluate:
+    if args.type_training == 'evaluate':
         # save predictions for creating decision tree / decision rules
         np.save('./output/' + '_'.join(args.concepts.split(',')), predictions)
 
-    return losses.avg, top1.avg
+    return top1.avg, losses.avg
 
 
 def train_baseline(train_loader, model, criterion, optimizer, epoch):
@@ -520,6 +572,10 @@ def train_baseline(train_loader, model, criterion, optimizer, epoch):
         input_var = torch.autograd.Variable(input_img)
         target_var = torch.autograd.Variable(target)
         output = model(input_var)  # compute model output
+        # # added these lines in my new model with only 1 neuron
+        # target_var = target_var.unsqueeze(1)
+        # target_var = target_var.float()
+        # ###########
         loss = criterion(output, target_var)  # update the loss function
         # measure accuracy and record loss
         [prec1] = accuracy(output.data, target, topk=(1,))
@@ -560,16 +616,16 @@ def plot_figures(arguments, model, test_loader_with_path, conceptdir, test_loade
 
     if args.arch == "deepmir_resnet_bn" or arguments.arch == "deepmir_resnet_bn_v2":
         print("Plot correlation")
-        mean_correlation = plot_correlation_BN(arguments, test_loader_with_path, model, layer=args.whitened_layers)
+        plot_correlation_BN(arguments, test_loader_with_path, model, layer=args.whitened_layers)
     elif arguments.arch == "deepmir_resnet_cw" or arguments.arch == "resnet_cw" or \
-            arguments.arch == "deepmir_resnet_cw_v2":
+            arguments.arch == "deepmir_resnet_cw_v2" or args.arch == "deepmir_resnet_cw_v3":
         if len(args.whitened_layers) > 1:
             # split the layers in the whitened_layers string to get the individual layers
             whitened_layers = [int(x) for x in arguments.whitened_layers.split(',')]
             for layer in whitened_layers:
                 print("Plot correlation")
-                mean_correlation = plot_correlation(arguments, test_loader_with_path, model, layer=str(layer),
-                                                    evaluate=arguments.evaluate, fold='0')
+                plot_correlation(arguments, test_loader_with_path, model, layer=str(layer),
+                                 evaluate=arguments.type_training, fold='0')
                 print("Plot intra- and inter-concept similarities")
                 intra_concept_dot_product_vs_inter_concept_dot_product(arguments, conceptdir, str(layer),
                                                                        plot_cpt=arguments.concepts.split(','),
@@ -583,9 +639,9 @@ def plot_figures(arguments, model, test_loader_with_path, conceptdir, test_loade
             # False is if you want the top50 concept images for the whitened layer and the assigned neuron,
             # otherwise you can say for which layer neuron in that layer you want the top 50
             plot_concept_top50(arguments, test_loader_with_path, model, arguments.whitened_layers, False,
-                               activation_mode=arguments.act_mode, evaluate=arguments.evaluate, fold='0')
+                               activation_mode=arguments.act_mode, evaluate=arguments.type_training, fold='0')
             plot_top10(arguments, plot_cpt=arguments.concepts.split(','), layer=arguments.whitened_layers,
-                       evaluate=arguments.evaluate,
+                       evaluate=arguments.type_training,
                        fold='0')
             print("Plot 2d slice of representation")
             plot_concept_representation(args, test_loader_with_path, model, args.whitened_layers,
@@ -601,36 +657,38 @@ def plot_figures(arguments, model, test_loader_with_path, conceptdir, test_loade
 
         else:
             print("Plot correlation")
-            mean_correlation = plot_correlation(args, test_loader_with_path, model, layer=args.whitened_layers,
-                                                evaluate=args.evaluate, fold='0')
+            plot_correlation(args, test_loader_with_path, model, layer=args.whitened_layers,
+                             evaluate=args.type_training, fold='0')
             print("Plot top50 activated images")
             # False is if you want the top50 concept images for the whitened layer and the assigned neuron,
             # otherwise you can say for which layer neuron in that layer you want the top 50
             plot_concept_top50(args, test_loader_with_path, model, args.whitened_layers, False,
-                               activation_mode=args.act_mode, evaluate=args.evaluate, fold='0')
-            plot_top10(args, plot_cpt=args.concepts.split(','), layer=args.whitened_layers, evaluate=args.evaluate,
+                               activation_mode=args.act_mode, evaluate=args.type_training, fold='0')
+            plot_top10(args, plot_cpt=args.concepts.split(','), layer=args.whitened_layers, evaluate=args.type_training,
                        fold='0')
             # use below if you want to get the most act images for another neuron (and specify which neuron)
             # plot_concept_top50(args, test_loader_with_path, model, args.whitened_layers, 10,
             #                    activation_mode=args.act_mode)
             # plot_top10(args, plot_cpt=args.concepts.split(','), layer=args.whitened_layers)
-            print("Plot 2d slice of representation")
-            plot_concept_representation(args, test_loader_with_path, model, args.whitened_layers,
-                                        plot_cpt=[concept_name[0], concept_name[1]], activation_mode=args.act_mode)
+            # print("Plot 2d slice of representation")
+            # plot_concept_representation(args, test_loader_with_path, model, args.whitened_layers,
+            #                             plot_cpt=[concept_name[0], concept_name[1]], activation_mode=args.act_mode)
             print("Plot intra- and inter-concept similarities")
             intra_concept_dot_product_vs_inter_concept_dot_product(args, conceptdir, args.whitened_layers,
                                                                    plot_cpt=args.concepts.split(','),
-                                                                   arch='deepmir_resnet_cw', model=model)
-
-            # print("Plot concept importance for overall classifier")
-            # NOTE: to use this function, the batch size should be > 1 as the batch size  size is used to define the
-            # switching of axes!
-            # concept_permutation_importance(args, test_loader, args.whitened_layers, criterion,
-            #                                num_concepts=len(args.concepts.split(',')), model=model)
+                                                                   arch='deepmir_resnet_cw_v3', model=model)
             #
-            print("Plot AUC-concept_purity")
-            plot_auc_cw(args, conceptdir, whitened_layers=args.whitened_layers, plot_cpt=concept_name,
-                        activation_mode=args.act_mode)
+            # # print("Plot concept importance for overall classifier")
+            # # NOTE: to use this function, the batch size should be > 1 as the batch size size is used to define the
+            # # switching of axes! Also, I need a shuffled test set because the function uses the activation values for
+            # # a concept to switch them and then compute the loss and acc (and the difference wrt the original loss and
+            # # acc is defined as the concept importance)
+            # # concept_permutation_importance_targets(args, test_loader, args.whitened_layers, criterion,
+            # #                                        num_concepts=len(args.concepts.split(',')), model=model)
+            #
+            # print("Plot AUC-concept_purity")
+            # plot_auc_cw(args, conceptdir, whitened_layers=args.whitened_layers, plot_cpt=concept_name,
+            #             activation_mode=args.act_mode)
 
             print("Plot receptive field over most activated img")
             saliency_map_concept_cover(args, args.whitened_layers, num_concepts=len(args.concepts.split(',')),
@@ -685,9 +743,11 @@ def adjust_learning_rate(arguments, optimizer, epoch):
     :param epoch: current epoch
     :return: sets the learning rate to the initial LR decayed by 10 every 30 epochs
     """
+    print('old lr', arguments.lr)
     lr = arguments.lr * (0.1 ** (epoch // 30))
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
+    print('new lr', lr)
 
 
 def accuracy(output, target, topk=(1,)):
@@ -700,6 +760,30 @@ def accuracy(output, target, topk=(1,)):
     maxk = max(topk)
     batch_size = target.size(0)
 
+    # for CrossEntropyLoss use below
+    _, pred = output.topk(maxk, 1, True, True)
+    # for BCELoss use below
+    # pred = (output > 0.5).float()
+    pred = pred.t()
+
+    correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+    res = []
+    for k in topk:
+        correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+        res.append(correct_k.mul_(100.0 / batch_size))
+    return res
+
+
+def accuracy_CI_targets(output, target, topk=(1,)):
+    """
+    :param output: model output (prediction)
+    :param target: target value (true)
+    :param topk: specification for the number of additional instances that need accuracy calculation (top-k accuracy)
+    :return: computes the precision@k for the specified values of k
+    """
+    maxk = max(topk)
+    batch_size = 1
     _, pred = output.topk(maxk, 1, True, True)
     pred = pred.t()
     correct = pred.eq(target.view(1, -1).expand_as(pred))
@@ -747,12 +831,14 @@ def get_class_weights(images, n_classes):
     return weight_per_class
 
 
-def balanced_data_loader(arguments, dataset_dir):
+def balanced_data_loader(arguments, dataset_dir, paths):
     """
     :param arguments: arguments given in training/evaluation initialization
     :param dataset_dir: directory where dataset is stored
+    :param paths: boolean whether or not to include the paths in the data loader
     :return: data loader that uses balanced class weights to balance the data that is fed to the model
     """
+
     dataset = datasets.ImageFolder(dataset_dir, transforms.Compose([
         transforms.ToTensor(),
     ]))
@@ -761,8 +847,15 @@ def balanced_data_loader(arguments, dataset_dir):
     weights = make_weights_for_balanced_classes(dataset.imgs, len(dataset.classes))
     weights = torch.DoubleTensor(weights)
     sampler = torch.utils.data.sampler.WeightedRandomSampler(weights, len(weights))
-    loader = torch.utils.data.DataLoader(dataset, batch_size=arguments.batch_size, shuffle=False,
-                                         sampler=sampler, num_workers=arguments.workers, pin_memory=False)
+    if paths:
+        loader = torch.utils.data.DataLoader(
+            ImageFolderWithPaths(dataset_dir, transforms.Compose([
+                transforms.ToTensor(),
+            ])), batch_size=arguments.batch_size, shuffle=False, sampler=sampler, num_workers=arguments.workers,
+            pin_memory=False)
+    else:
+        loader = torch.utils.data.DataLoader(dataset, batch_size=arguments.batch_size, shuffle=False,
+                                             sampler=sampler, num_workers=arguments.workers, pin_memory=False)
 
     return loader
 

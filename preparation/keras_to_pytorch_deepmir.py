@@ -385,5 +385,35 @@ import torchvision.models as models
 resnet = models.__dict__['resnet18'](num_classes=2)
 summary(resnet)
 # %%
-state_dict_resnet = torch.load('checkpoints/palindrome_True/RESNET_PREMIRNA_CPT_WHITEN_TRANSFER_12_checkpoint.pth.tar',
-                               map_location='cpu')['state_dict']
+state_dict = torch.load('checkpoints/presence_terminal_loop/DEEPMIR_RESNET_PREMIRNA_v3_BN_noextralinear_1_foldnNone_'
+                        'model_best.pth.tar', map_location='cpu')['state_dict']
+# Print model's state_dict
+print("Model's state_dict:")
+for param_tensor in state_dict:
+    print(param_tensor, "\t", state_dict[param_tensor])
+
+#%%
+weight_tensor_neg = state_dict['module.model.linear2.weight'][0]
+bias_neg = state_dict['module.model.linear2.bias'][0]
+total_sum_neg = 0
+sum_neg = 0
+for act in [4, 0.1]:
+    for weight in weight_tensor_neg:
+        sum_neg += weight * act
+    total_sum_neg += sum_neg
+final_neg = total_sum_neg + bias_neg
+
+weight_tensor_pos = state_dict['module.model.linear2.weight'][1]
+bias_pos = state_dict['module.model.linear2.bias'][1]
+total_sum_pos = 0
+sum_pos = 0
+for act in [4, 0.1]:
+    for weight in weight_tensor_pos:
+        sum_pos += weight * act
+total_sum_pos += sum_pos
+final_pos = total_sum_pos + bias_pos
+
+
+softmax = torch.nn.Softmax(dim=0)
+output = torch.stack((final_neg, final_pos))
+output_prob = softmax(output)
