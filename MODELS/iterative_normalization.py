@@ -47,6 +47,7 @@ class iterative_normalization_py(torch.autograd.Function):
         xn = wm.matmul(xc)
         Xn = xn.view(X.size(1), X.size(0), *X.size()[2:]).transpose(0, 1).contiguous()
         ctx.save_for_backward(*saved)
+        # print(Xn)
         return Xn
 
     @staticmethod
@@ -330,7 +331,8 @@ class IterNormRotation(torch.nn.Module):
 
 
 if __name__ == '__main__':
-    ItN = IterNormRotation(64, num_groups=2, T=10, momentum=1, affine=False)
+    # ItN = IterNormRotation(64, num_groups=2, T=10, momentum=1, affine=False)
+    ItN = IterNormRotation(64, num_groups=1, T=10, momentum=1, affine=False)
     ItN.train()
     x = torch.randn(16, 64, 14, 14)
     x.requires_grad_()

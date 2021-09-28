@@ -88,16 +88,19 @@ def plot_concept_top50(args, test_loader, model, whitened_layers, print_other=Fa
     outputs = []
 
     def hook(module, input, output):
-        X_hat = iterative_normalization_py.apply(input[0], module.running_mean, module.running_wm, module.num_channels,
-                                                 module.T, module.eps, module.momentum, module.training)
-        size_X = X_hat.size()
-        size_R = module.running_rot.size()
-        X_hat = X_hat.view(size_X[0], size_R[0], size_R[2], *size_X[2:])
+        if args.arch == "deepmir_resnet_cw_v3":
+            outputs.append(input[0].cpu().numpy())
+        else:
+            X_hat = iterative_normalization_py.apply(input[0], module.running_mean, module.running_wm, module.num_channels,
+                                                     module.T, module.eps, module.momentum, module.training)
+            size_X = X_hat.size()
+            size_R = module.running_rot.size()
+            X_hat = X_hat.view(size_X[0], size_R[0], size_R[2], *size_X[2:])
 
-        X_hat = torch.einsum('bgchw,gdc->bgdhw', X_hat, module.running_rot)
-        X_hat = X_hat.view(*size_X)
+            X_hat = torch.einsum('bgchw,gdc->bgdhw', X_hat, module.running_rot)
+            X_hat = X_hat.view(*size_X)
 
-        outputs.append(X_hat.cpu().numpy())
+            outputs.append(X_hat.cpu().numpy())
 
     if args.arch == "resnet_cw":
         for layer in layer_list:
@@ -110,7 +113,7 @@ def plot_concept_top50(args, test_loader, model, whitened_layers, print_other=Fa
                 model.layer3[layer - layers[0] - layers[1] - 1].bn1.register_forward_hook(hook)
             elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
                 model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
-    if args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2" or args.arch == "deepmir_resnet_cw_v3":
+    if args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
         for layer in layer_list:
             if int(layer) == 1:
                 model.bn1.register_forward_hook(hook)
@@ -118,6 +121,8 @@ def plot_concept_top50(args, test_loader, model, whitened_layers, print_other=Fa
                 model.bn2.register_forward_hook(hook)
             elif int(layer) == 3:
                 model.bn3.register_forward_hook(hook)
+    elif args.arch == "deepmir_resnet_cw_v3":
+        model.pool4.register_forward_hook(hook)
 
     begin = 0
     end = len(args.concepts.split(','))
@@ -155,14 +160,18 @@ def plot_concept_top50(args, test_loader, model, whitened_layers, print_other=Fa
                     elif activation_mode == 'pool_max':
                         kernel_size = 2
                         r = output.shape[3] % kernel_size
-                        if r == 0:
-                            val = np.concatenate((val, skimage.measure.block_reduce(output[:, :, :, :],
-                                                                                    (1, 1, kernel_size, kernel_size),
-                                                                                    np.max).mean((2, 3))[:, k]))
+                        if args.arch == "deepmir_resnet_cw_v3":
+                            val = np.concatenate((val, output.mean((2, 3))[:, k]))
                         else:
-                            val = np.concatenate((val, skimage.measure.block_reduce(output[:, :, :-r, :-r],
-                                                                                    (1, 1, kernel_size, kernel_size),
-                                                                                    np.max).mean((2, 3))[:, k]))
+                            if r == 0:
+                                val = np.concatenate((val, skimage.measure.block_reduce(output[:, :, :, :],
+                                                                                        (1, 1, kernel_size, kernel_size),
+                                                                                        np.max).mean((2, 3))[:, k]))
+                            else:
+                                val = np.concatenate((val, skimage.measure.block_reduce(output[:, :, :-r, :-r],
+                                                                                        (1, 1, kernel_size, kernel_size),
+                                                                                        np.max).mean((2, 3))[:, k]))
+
 
                 # combine all the activation scalars for all test images in one list
                 val = val.reshape((len(outputs), -1))
@@ -180,6 +189,23 @@ def plot_concept_top50(args, test_loader, model, whitened_layers, print_other=Fa
                 for j in range(50):
                     src = arr[j][1]
                     copyfile(src, output_path + '/' + 'layer' + layer + '_' + str(j + 1) + '.jpg')
+                # save the 10 least activated images for each concept
+                for k in range(len(arr)-10, len(arr)):
+                    src = arr[k][1]
+                    copyfile(src, output_path + '/' + 'layer' + layer + '_' + str(k + 1) + '.jpg')
+                # save the 10 moderately activated images, with moderate we mean images with activation similar to the
+                # modus of the activation
+                for l in range(round((len(arr)/2)-10), round((len(arr)/2)+10)):
+                    src = arr[l][1]
+                    copyfile(src, output_path + '/' + 'layer' + layer + '_' + str(l + 1) + '.jpg')
+
+                for m in range(round((len(arr)/4)-5), round((len(arr)/4)+5)):
+                    src = arr[m][1]
+                    copyfile(src, output_path + '/' + 'layer' + layer + '_' + str(m + 1) + '.jpg')
+
+                for n in range(round(3*(len(arr)/4)-5), round(3*(len(arr)/4)+5)):
+                    src = arr[n][1]
+                    copyfile(src, output_path + '/' + 'layer' + layer + '_' + str(n + 1) + '.jpg')
 
     return print("Done with searching for the top 50")
 
@@ -228,7 +254,7 @@ def plot_top10(args, plot_cpt=None, layer=None, evaluate='evaluate', fold='0'):
 
         fig.tight_layout()
         plt.show()
-        fig.savefig(folder + 'layer' + str(layer) + '.jpg')
+        fig.savefig(folder + 'layer' + str(layer) + '.svg', format='svg')
     # in case we have more than 1 concept, we create a plot with 10 images in each row
     else:
         fig, axes = plt.subplots(figsize=(30, 3 * len(plot_cpt)), nrows=len(plot_cpt), ncols=10)
@@ -248,7 +274,7 @@ def plot_top10(args, plot_cpt=None, layer=None, evaluate='evaluate', fold='0'):
 
                 fig.tight_layout()
                 plt.show()
-                fig.savefig(folder + 'layer' + str(layer) + '.jpg')
+                fig.savefig(folder + 'layer' + str(layer) + '.svg', format='svg')
             print('done')
 
         else:
@@ -263,7 +289,7 @@ def plot_top10(args, plot_cpt=None, layer=None, evaluate='evaluate', fold='0'):
 
             fig.tight_layout()
             plt.show()
-            fig.savefig(folder + 'layer' + str(layer) + '.jpg')
+            fig.savefig(folder + 'layer' + str(layer) + '.svg', format='svg')
 
 
 def get_layer_representation(args, test_loader, layer, cpt_idx, model):
@@ -285,17 +311,20 @@ def get_layer_representation(args, test_loader, layer, cpt_idx, model):
         outputs = []
 
         def hook(module, input, output):
-            X_hat = iterative_normalization_py.apply(input[0], module.running_mean, module.running_wm,
-                                                     module.num_channels, module.T,
-                                                     module.eps, module.momentum, module.training)
-            size_X = X_hat.size()
-            size_R = module.running_rot.size()
-            X_hat = X_hat.view(size_X[0], size_R[0], size_R[2], *size_X[2:])
+            if args.arch == "deepmir_resnet_cw_v3":
+                outputs.append(output.cpu().numpy())
+            else:
+                X_hat = iterative_normalization_py.apply(input[0], module.running_mean, module.running_wm,
+                                                         module.num_channels,
+                                                         module.T, module.eps, module.momentum, module.training)
+                size_X = X_hat.size()
+                size_R = module.running_rot.size()
+                X_hat = X_hat.view(size_X[0], size_R[0], size_R[2], *size_X[2:])
 
-            X_hat = torch.einsum('bgchw,gdc->bgdhw', X_hat, module.running_rot)
-            X_hat = X_hat.view(*size_X)
+                X_hat = torch.einsum('bgchw,gdc->bgdhw', X_hat, module.running_rot)
+                X_hat = X_hat.view(*size_X)
 
-            outputs.append(X_hat.cpu().numpy())
+                outputs.append(X_hat.cpu().numpy())
 
         layer = int(layer)
         if args.arch == "resnet_cw":
@@ -314,6 +343,8 @@ def get_layer_representation(args, test_loader, layer, cpt_idx, model):
                 model.bn2.register_forward_hook(hook)
             elif layer == 3:
                 model.bn3.register_forward_hook(hook)
+        elif args.arch == "deepmir_resnet_cw_v3":
+            model.pool4.register_forward_hook(hook)
 
         paths = []
         vals = None
@@ -413,8 +444,8 @@ def intra_concept_dot_product_vs_inter_concept_dot_product(args, concept_dir, la
                     model.layer3[layer - layers[0] - layers[1] - 1].bn1.register_forward_hook(hook)
                 elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
                     model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
-            elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2" or args.arch == "deepmir_" \
-                                                                                                         "resnet_cw_v3":
+            elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2" or args.arch == \
+                "deepmir_resnet_cw_v3":
                 if layer == 1:
                     model.bn1.register_forward_hook(hook)
                 elif layer == 2:
@@ -480,12 +511,23 @@ def intra_concept_dot_product_vs_inter_concept_dot_product(args, concept_dir, la
     print(dot_product_matrix)
     # plot the inter and intra similarity measures as a heatmap
     plt.figure()
-    ticklabels = [s.replace('_', ' ') for s in plot_cpt]
+    # ticklabels = [s.replace('_', ' ') for s in plot_cpt]
+    # ticklabels_xaxis = ['Large\nasymmetric\nbulge', 'At least\n90% base\npairs and\nwobbles in\nstem',
+    #                       'Large\nterminal\nloop', 'U-G-U\nmotif',
+    #                       'A-U pairs\nmotif', 'Large\nasymmetric\nbulge\ninstead\nof terminal\nloop']
+    ticklabels_xaxis = ['Large asymmetric bulge', 'At least 90% base\npairs and wobbles in\nstem']
+    # ticklabels_yaxis = ['Large asymmetric\nbulge', 'At least 90%\nbase pairs and\nwobbles in stem',
+    #                     'Large terminal\nloop ', 'U-G-U motif', 'A-U pairs motif',
+    #                     'Large asymmetric\nbulge instead\nof terminal loop']
+    ticklabels_yaxis = ['large\nasymmetric\nbulge', 'At least\n90% base\npairs and\nwobbles in\nstem']
     sns.set(font_scale=1)
-    ax = sns.heatmap(dot_product_matrix, vmin=0, vmax=1, xticklabels=ticklabels, yticklabels=ticklabels,
-                     annot=True)
+    ax = sns.heatmap(dot_product_matrix, vmin=0, vmax=1, xticklabels=ticklabels_xaxis, yticklabels=ticklabels_yaxis,
+                     annot=True, cmap='Oranges', annot_kws={"fontsize": 12})
+    plt.xticks(rotation=0, fontsize=8)
+    plt.yticks(rotation=0, fontsize=8)
+    plt.title('Normalized inter- and intra-concept similarities', fontweight='bold')
     ax.figure.tight_layout()
-    plt.savefig(dst + arch + '_' + str(layer) + '.jpg')
+    plt.savefig(dst + arch + '_' + str(layer) + '.svg', format='svg')
 
     return intra_dot_product_means, inter_dot_product_means, intra_dot_product_means_normed, \
            inter_dot_product_means_normed
@@ -638,7 +680,6 @@ def plot_auc_cw(args, concept_dir, whitened_layers, plot_cpt=None, activation_mo
 
                         outputs.append(X_hat.cpu().numpy())
 
-
                     # append the hooks to the concept whitening layers
                     layer = int(layer)
                     if args.arch == "resnet_cw":
@@ -728,6 +769,10 @@ def plot_auc_cw(args, concept_dir, whitened_layers, plot_cpt=None, activation_mo
 
     # create a bar plot with the obtained mean auc scores and std
     concepts = list(args.concepts.split(','))
+    # concepts = ['Large\nasymmetric\nbulge', 'At least\n90% base\npairs and\nwobbles in\nstem',
+    #             'Large\nterminal\nloop\n', 'U-G-U\nmotif',
+    #             'A-U pairs\nmotif', 'Large\nasymmetric\nbulge\ninstead of\nterminal loop']
+    concepts = ['Large asymmetric\nbulge', 'At least 90% base\npairs and wobbles in\nstem']
     x_pos = np.arange(len(concepts))
     aucs_plot = [auc for sublist in aucs for auc in sublist]
     aucs_err_plot = [auc_err for sublist in aucs_err for auc_err in sublist]
@@ -737,11 +782,13 @@ def plot_auc_cw(args, concept_dir, whitened_layers, plot_cpt=None, activation_mo
 
     plt.figure()
     plt.bar(x_pos, aucs_plot, yerr=aucs_err_plot, ecolor='black', align='center')
-    plt.xticks(x_pos, concepts, rotation=90)
-    plt.ylabel('Concept AUC scores')
+    plt.xticks(x_pos, concepts, rotation=0, fontsize=9)
+    plt.yticks(fontsize=9)
+    plt.ylabel('Average AUC scores')
+    plt.title('Average concept AUC scores', fontweight='bold')
     plt.tight_layout()
     plt.show()
-    plt.savefig(dst + 'concept_aucs' + str(layer) + '.jpg')
+    plt.savefig(dst + 'concept_aucs' + str(layer) + '.svg', format='svg')
 
     return aucs
 
@@ -798,17 +845,20 @@ def plot_concept_representation(args, test_loader, model, whitened_layers, plot_
         outputs = []
 
         def hook(module, input, output):
-            X_hat = iterative_normalization_py.apply(input[0], module.running_mean, module.running_wm,
-                                                     module.num_channels, module.T,
-                                                     module.eps, module.momentum, module.training)
-            size_X = X_hat.size()
-            size_R = module.running_rot.size()
-            X_hat = X_hat.view(size_X[0], size_R[0], size_R[2], *size_X[2:])
+            if args.arch == "deepmir_resnet_cw_v3":
+                outputs.append(output.cpu().numpy())
+            else:
+                X_hat = iterative_normalization_py.apply(input[0], module.running_mean, module.running_wm,
+                                                         module.num_channels, module.T,
+                                                         module.eps, module.momentum, module.training)
+                size_X = X_hat.size()
+                size_R = module.running_rot.size()
+                X_hat = X_hat.view(size_X[0], size_R[0], size_R[2], *size_X[2:])
 
-            X_hat = torch.einsum('bgchw,gdc->bgdhw', X_hat, module.running_rot)
-            X_hat = X_hat.view(*size_X)
+                X_hat = torch.einsum('bgchw,gdc->bgdhw', X_hat, module.running_rot)
+                X_hat = X_hat.view(*size_X)
 
-            outputs.append(X_hat.cpu().numpy())
+                outputs.append(X_hat.cpu().numpy())
 
         if args.arch == "resnet_cw":
             for layer in layer_list:
@@ -829,6 +879,8 @@ def plot_concept_representation(args, test_loader, model, whitened_layers, plot_
                     model.bn2.register_forward_hook(hook)
                 elif int(whitened_layer) == 3:
                     model.bn3.register_forward_hook(hook)
+        elif args.arch == "deepmir_resnet_cw_v3":
+            model.pool4.register_forward_hook(hook)
 
         concepts = args.concepts.split(',')
         cpt_idx = [concepts.index(plot_cpt[0]), concepts.index(plot_cpt[1])]
@@ -853,13 +905,16 @@ def plot_concept_representation(args, test_loader, model, whitened_layers, plot_
                 elif activation_mode == 'pool_max':
                     kernel_size = 3
                     r = output.shape[3] % kernel_size
-                    if r == 0:
-                        val.append(skimage.measure.block_reduce(output[:, :, :, :], (1, 1, kernel_size, kernel_size),
-                                                                np.max).mean((2, 3))[:, cpt_idx])
+                    if args.arch == "deepmir_resnet_cw_v3":
+                        val.append(output.mean((2, 3))[:, cpt_idx])
                     else:
-                        val.append(
-                            skimage.measure.block_reduce(output[:, :, :-r, :-r], (1, 1, kernel_size, kernel_size),
-                                                         np.max).mean((2, 3))[:, cpt_idx])
+                        if r == 0:
+                            val.append(skimage.measure.block_reduce(output[:, :, :, :], (1, 1, kernel_size, kernel_size),
+                                                                    np.max).mean((2, 3))[:, cpt_idx])
+                        else:
+                            val.append(
+                                skimage.measure.block_reduce(output[:, :, :-r, :-r], (1, 1, kernel_size, kernel_size),
+                                                             np.max).mean((2, 3))[:, cpt_idx])
             val = np.array(val)
             if i == 0:
                 vals = val
@@ -1027,7 +1082,8 @@ def plot_correlation_BN(args, test_loader, model, layer):
                 model.layer3[layer - layers[0] - layers[1] - 1].bn1.register_forward_hook(hook)
             elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
                 model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
-        elif args.arch == "deepmir_resnet_bn" or args.arch == "deepmir_resnet_bn_v2":
+        elif args.arch == "deepmir_resnet_bn" or args.arch == "deepmir_resnet_bn_v2" or \
+                args.arch == "deepmir_resnet_bn_v3":
             if layer == 1:
                 model.relu3.register_forward_hook(hook)
             elif layer == 2:
@@ -1581,8 +1637,6 @@ def saliency_map_concept(args, val_loader, layer, model=None):
     outputs = []
 
     def hook(module, input, output):
-        print(input.shape)
-        print(output.shape)
         outputs.append(output)
 
     layer = int(layer)
@@ -1596,7 +1650,7 @@ def saliency_map_concept(args, val_loader, layer, model=None):
         elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
             model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
     elif args.arch == "deepmir_resnet_cw_v3":
-        model.bn3.register_backward_hook(hook)
+        model.pool4.register_forward_hook(hook)
 
     for j in range(len(args.concepts.split(','))):
         save_folder = os.path.join(dst, "concept_" + str(j))
@@ -1610,7 +1664,7 @@ def saliency_map_concept(args, val_loader, layer, model=None):
         for j in range(len(args.concepts.split(','))):
             output = model(input_var)
             model.zero_grad()
-            outputs[0][0, j, :, :].mean().backward()  # used to be [0,j,:,:]
+            outputs[0][0, j, :, :].mean().backward()
             save_folder = os.path.join(dst, "concept_" + str(j))
             plt.figure()
             plt.subplot(1, 2, 1)
@@ -1685,8 +1739,16 @@ def saliency_map_concept_cover(args, layer, num_concepts=7, model=None):
     with torch.no_grad():
         # create a data loader that will go over the 50 most activated images per concept, these are the most
         # interesting in my opinion
+        # base_dir = 'plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/' + \
+        #            '_'.join(args.whitened_layers) + '_rot_cw/'
+        #
+        # most_activated_img_loader = torch.utils.data.DataLoader(
+        #     ImageFolderWithPaths(base_dir, transforms.Compose([
+        #         transforms.ToTensor(),
+        #     ])),
+        #     batch_size=1, shuffle=False, num_workers=args.workers, pin_memory=False)
         base_dir = 'plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/' + \
-                   '_'.join(args.whitened_layers) + '_rot_cw/'
+                   '_'.join(args.whitened_layers) + '_rot_otherdim/'
         most_activated_img_loader = torch.utils.data.DataLoader(
             ImageFolderWithPaths(base_dir, transforms.Compose([
                 transforms.ToTensor(),
@@ -1725,9 +1787,12 @@ def saliency_map_concept_cover(args, layer, num_concepts=7, model=None):
                     new_activations = new_activations[0, :, :, :].clamp(min=0.0).mean(dim=(1, 2))
                     outputs = []
                     decrease_in_activations = base_activations - new_activations
-                    for j in range(num_concepts):
-                        saliency[j, p:p + cover_size, q:q + cover_size] += decrease_in_activations[j].cpu().numpy()
+                    # for j in range(len(concepts)):
+                    for j in [4, 36]:
+                        # saliency[j, p:p + cover_size, q:q + cover_size] += decrease_in_activations[j].cpu().numpy()
+                        saliency[0, p:p + cover_size, q:q + cover_size] += decrease_in_activations[j].cpu().numpy()
                     counter[p:p + cover_size, q:q + cover_size] += 1.0
+
 
             saliency = saliency / counter
 
@@ -1738,20 +1803,38 @@ def saliency_map_concept_cover(args, layer, num_concepts=7, model=None):
             # normalize with positive and negative values mixed, will result in range of positive values between 0 and 1
             # saliency = (saliency - np.min(saliency)) / (np.max(saliency) - np.min(saliency))
             # old normalizing, did not go well with positive and negative values mixed
-            saliency = (saliency - saliency.min()) / saliency.max()
+            saliency = (saliency - saliency.min()) / (saliency.max() - saliency.min())
             lower_limit = np.percentile(saliency, 94)   # used to be 94
             saliency[saliency < lower_limit] = 0.3
             saliency[saliency >= lower_limit] = 1.0
 
             input_image = input[0, :, :, :].permute(1, 2, 0).cpu().numpy()
 
-            concepts_sorted = sorted(concepts)
-            for j in range(num_concepts):
+            # concepts_sorted = sorted(concepts)
+            # for j in range(num_concepts):
+            #     concept_index = int(str(_)[-3])
+            #     base_folder = dst + f"activatedimg_concept_{concepts_sorted[concept_index]}"
+            #     if not os.path.exists(base_folder):
+            #         os.mkdir(base_folder)
+            #     save_folder = os.path.join(base_folder, "concept_" + concepts[j])
+            #     if not os.path.exists(save_folder):
+            #         os.mkdir(save_folder)
+            #     image = Image.fromarray(np.uint8(input_image * 255)).convert('RGBA')
+            #     image = np.array(image)
+            #     image[:, :, 3] = (saliency[j, :, :] * 255).astype(np.uint8)
+            #     image = Image.fromarray(image)
+            #     image.save(os.path.join(save_folder, str(path)[-9:-7] + '.png'), 'PNG')
+            #     print("saved: " + str(j))
+
+            nodes = [36, 4]
+            for j in range(len(nodes)):
+                print(str(_))
                 concept_index = int(str(_)[-3])
-                base_folder = dst + f"activatedimg_concept_{concepts_sorted[concept_index]}"
+                print(concept_index)
+                base_folder = dst + f"activatedimg_concept_{nodes[concept_index]}"
                 if not os.path.exists(base_folder):
                     os.mkdir(base_folder)
-                save_folder = os.path.join(base_folder, "concept_" + concepts[j])
+                save_folder = os.path.join(base_folder, "concept_" + str(nodes[j]))
                 if not os.path.exists(save_folder):
                     os.mkdir(save_folder)
                 image = Image.fromarray(np.uint8(input_image * 255)).convert('RGBA')
@@ -1762,8 +1845,7 @@ def saliency_map_concept_cover(args, layer, num_concepts=7, model=None):
                 print("saved: " + str(j))
 
 
-def saliency_map_concept_cover_2(args, test_loader, layer, arch='resnet_cw', dataset='isic', num_concepts=7,
-                                 model=None):
+def saliency_map_concept_cover_2(args, test_loader, layer, nodes=None, model=None):
     dst = './plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/saliency_map_concept_cover/'
     try:
         os.mkdir(dst)
@@ -1781,6 +1863,7 @@ def saliency_map_concept_cover_2(args, test_loader, layer, arch='resnet_cw', dat
     def hook(module, input, output):
         outputs.append(output)
 
+    # append hooks to the whitened layers
     layer = int(layer)
     if args.arch == "resnet_cw":
         if layer <= layers[0]:
@@ -1792,27 +1875,41 @@ def saliency_map_concept_cover_2(args, test_loader, layer, arch='resnet_cw', dat
         elif layer <= layers[0] + layers[1] + layers[2] + layers[3]:
             model.layer4[layer - layers[0] - layers[1] - layers[2] - 1].bn1.register_forward_hook(hook)
     elif args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
-        if int(layer) == 1:
+        if layer == 1:
             model.bn1.register_forward_hook(hook)
-        elif int(layer) == 2:
+        elif layer == 2:
             model.bn2.register_forward_hook(hook)
-        elif int(layer) == 3:
+        elif layer == 3:
             model.bn3.register_forward_hook(hook)
+    elif args.arch == "deepmir_resnet_cw_v3":
+        model.pool4.register_forward_hook(hook)
 
-    for j in range(num_concepts, num_concepts + 1):
-        save_folder = os.path.join(dst, "concept_" + str(j))
+    for j in range(len(nodes)):
+        save_folder = os.path.join(dst, "node_" + str(j))
         try:
             os.mkdir(save_folder)
         except:
             pass
 
-    cover_size = 6
+    cover_size = 5
     with torch.no_grad():
-        for i, (input, target) in enumerate(test_loader):
+        base_dir = 'plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/' + \
+                   '_'.join(args.whitened_layers) + '_rot_otherdim/'
+        most_activated_img_loader = torch.utils.data.DataLoader(
+            ImageFolderWithPaths(base_dir, transforms.Compose([
+                transforms.ToTensor(),
+            ])),
+            batch_size=1, shuffle=False, num_workers=args.workers, pin_memory=False)
+
+        for i, (input, _, path) in enumerate(most_activated_img_loader):
             random_patch = torch.tensor(np.random.normal(size=(3, cover_size, cover_size)))
             input_var = torch.autograd.Variable(input)
             output = model(input_var)
-            base_activations = F.max_pool2d(outputs[0], kernel_size=2, stride=1)
+            if args.arch == "deepmir_resnet_cw_v3":
+                # this model already applies maxpool2d to the output
+                base_activations = outputs[0]
+            else:
+                base_activations = F.max_pool2d(outputs[0], kernel_size=2, stride=1)
             base_activations = base_activations[0, :, :, :].clamp(min=0.0).mean(dim=(1, 2))
             outputs = []
 
@@ -1826,11 +1923,15 @@ def saliency_map_concept_cover_2(args, test_loader, layer, arch='resnet_cw', dat
                     new_input[0, :, p:p + cover_size, q:q + cover_size] = random_patch
                     input_var = torch.autograd.Variable(new_input)
                     output = model(input_var)
-                    new_activations = F.max_pool2d(outputs[0], kernel_size=2, stride=1)
+                    if args.arch == "deepmir_resnet_cw_v3":
+                        # this model already applies maxpool2d to the output
+                        new_activations = outputs[0]
+                    else:
+                        new_activations = F.max_pool2d(outputs[0], kernel_size=2, stride=1)
                     new_activations = new_activations[0, :, :, :].clamp(min=0.0).mean(dim=(1, 2))
                     outputs = []
                     decrease_in_activations = base_activations - new_activations
-                    for j in range(num_concepts, num_concepts + 1):
+                    for j in range(2):
                         saliency[0, p:p + cover_size, q:q + cover_size] += decrease_in_activations[j].cpu().numpy()
                     counter[p:p + cover_size, q:q + cover_size] += 1.0
             saliency = saliency / counter
@@ -1846,24 +1947,41 @@ def saliency_map_concept_cover_2(args, test_loader, layer, arch='resnet_cw', dat
 
             input_image = input[0, :, :, :].permute(1, 2, 0).cpu().numpy()
 
-            for j in range(num_concepts, num_concepts + 1):
-                save_folder = os.path.join(dst, "concept_" + str(j))
+            # for j in range(num_concepts, num_concepts + 1):
+            #     save_folder = os.path.join(dst, "concept_" + str(j))
+            #     image = Image.fromarray(np.uint8(input_image * 255)).convert('RGBA')
+            #     image = np.array(image)
+            #     image[:, :, 3] = (saliency[0, :, :] * 255).astype(np.uint8)
+            #     image = Image.fromarray(image)
+            #     image.save(os.path.join(save_folder, str(i) + '.png'), 'PNG')
+            #     print("saved: " + str(j))
+
+            for j in range(len(nodes)):
+                base_folder = dst + f"activatedimg_concept_{str(_)[-3]}"
+                if not os.path.exists(base_folder):
+                    os.mkdir(base_folder)
+                save_folder = os.path.join(base_folder, "concept_" + str(nodes[j]))
+                if not os.path.exists(save_folder):
+                    os.mkdir(save_folder)
                 image = Image.fromarray(np.uint8(input_image * 255)).convert('RGBA')
                 image = np.array(image)
-                image[:, :, 3] = (saliency[0, :, :] * 255).astype(np.uint8)
+                image[:, :, 3] = (saliency[j, :, :] * 255).astype(np.uint8)
                 image = Image.fromarray(image)
-                image.save(os.path.join(save_folder, str(i) + '.png'), 'PNG')
+                image.save(os.path.join(save_folder, str(path)[-9:-7] + '.png'), 'PNG')
                 print("saved: " + str(j))
 
 
-def get_activations_finalpart(args, test_loader, model, layer):
+def get_activations_finalpart(args, test_loader, model, layer, type_training, num_neurons_cwlayer):
     """ function that saves all activations of the relu layer after the CW layer and the activations of linear1"""
 
     with torch.no_grad():
         dst = './plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/'
         if not os.path.exists(dst):
             os.mkdir(dst)
-        dst = dst + 'activations/'
+        if type_training == "activations_tree_train":
+            dst = dst + 'activations_trainingset/'
+        else:
+            dst = dst + 'activations/'
         if not os.path.exists(dst):
             os.mkdir(dst)
         model.eval()
@@ -1879,7 +1997,6 @@ def get_activations_finalpart(args, test_loader, model, layer):
 
         layer = int(layer)
         if args.arch == "deepmir_resnet_cw" or args.arch == "deepmir_resnet_cw_v2":
-                # or args.arch == "deepmir_resnet_cw_v3":
             if layer == 1:
                 model.relu3.register_forward_hook(hook_relu)
             elif layer == 2:
@@ -1889,8 +2006,7 @@ def get_activations_finalpart(args, test_loader, model, layer):
         if args.arch == "deepmir_resnet_cw_v3":
             model.pool4.register_forward_hook(hook_relu)
 
-        # change this range to be 0, len(neurons cw layer)
-        for k in range(0, 72):
+        for k in range(0, num_neurons_cwlayer):
             paths = []
             vals = None
             val = []
@@ -1920,7 +2036,7 @@ def get_activations_finalpart(args, test_loader, model, layer):
                     #         val = np.concatenate((val, skimage.measure.block_reduce(output[:, :, :-r, :-r],
                     #                                                                 (1, 1, kernel_size, kernel_size),
                     #                                                                 np.max).mean((2, 3))[:, k]))
-                    val.append(output[0].mean((2))[k])
+                    val.append(output[0].mean(2)[k])
                 # # val = val.reshape((len(outputs_relucw), -1))
                 # if i == 0:
                 #     vals = val
@@ -2202,12 +2318,12 @@ def load_deepmir_resnet_cw_v2_model(args, checkpoint_folder="./checkpoints", whi
     if whitened_layer is None:
         raise Exception("whitened_layer argument is required")
     elif len(whitened_layer) == 1:
-        arch = './checkpoints/resnet_deepmir_v2/DEEPMIR_RESNET_PREMIRNA_v2_BN_1_checkpoint.pth.tar'
+        arch = './checkpoints/deepmir_v2_bn/DEEPMIR_PREMIRNA_v2_BN_finetune_checkpoint.pth.tar'
         model = DeepMirResNetTransferv2(args, [int(whitened_layer)], model_file=arch)
         # checkpoint_name = '{}_{}_model_best.pth.tar'.format(prefix_name, whitened_layer)
         checkpoint_name = '{}_{}_foldn{}_checkpoint.pth.tar'.format(prefix_name, whitened_layer, fold_n)
     else:
-        arch = './checkpoints/resnet_deepmir_v2/DEEPMIR_RESNET_PREMIRNA_v2_BN_1_checkpoint.pth.tar'
+        arch = './checkpoints/deepmir_v2_bn/DEEPMIR_PREMIRNA_v2_BN_finetune_checkpoint.pth.tar'
         whitened_layer = [int(x) for x in args.whitened_layers.split(',')]
         model = DeepMirResNetTransferv2(args, whitened_layer, model_file=arch)
         # create a string from the list of whitened layers, remove the [] (first and last characters) and replace the
@@ -2240,7 +2356,8 @@ def load_deepmir_resnet_cw_v3_model(args, checkpoint_folder="./checkpoints", whi
         prefix_name = args.prefix[:args.prefix.find(f'_{whitened_layer[0]}')]
 
     concept_names = '_'.join(args.concepts.split(','))
-    arch = 'checkpoints/presence_terminal_loop/DEEPMIR_RESNET_PREMIRNA_v3_BN_final_model_best.pth.tar'
+    arch = 'checkpoints/presence_terminal_loop/DEEPMIR_PREMIRNA_vfinal_BN_finetune_model_best.pth.tar'
+    # arch = 'checkpoints/presence_terminal_loop/DEEPMIR_RESNET_PREMIRNA_v3_BN_oneoutput_1_foldnNone_checkpoint.pth.tar'
     model = DeepMirResNetTransferv3(args, [int(whitened_layer)], model_file=arch)
     # checkpoint_name = '{}_{}_foldn{}_checkpoint.pth.tar'.format(prefix_name, whitened_layer, fold_n)
 
@@ -2264,9 +2381,35 @@ def load_deepmir_resnet_v2_bn_model(args, checkpoint_folder="./checkpoints", whi
     if whitened_layer is None:
         raise Exception("whitened_layer argument is required")
     else:
-        arch = './checkpoints/resnet_deepmir_v2/DEEPMIR_RESNET_PREMIRNA_v2_BN_1_checkpoint.pth.tar'
+        arch = './checkpoints/deepmir_v2_bn/DEEPMIR_PREMIRNA_v2_BN_finetune_checkpoint.pth.tar'
         model = DeepMirResNetBNv2(args, model_file=arch)
-        checkpoint_name = 'resnet_deepmir_v2/DEEPMIR_RESNET_PREMIRNA_v2_BN_1_model_best.pth.tar'
+        checkpoint_name = 'deepmir_v2_bn/DEEPMIR_PREMIRNA_v2_BN_finetune_model_best.pth.tar'
+
+    model = torch.nn.DataParallel(model)
+
+    print(checkpoint_name)
+
+    checkpoint_path = os.path.join(checkpoint_folder, checkpoint_name)
+    if os.path.isfile(checkpoint_path):
+        print("=> loading checkpoint '{}'".format(checkpoint_path))
+        checkpoint = torch.load(checkpoint_path)
+        args.start_epoch = checkpoint['epoch']
+        model.load_state_dict(checkpoint['state_dict'])
+    else:
+        raise Exception("checkpoint {} not found!".format(checkpoint_path))
+
+    return model
+
+
+def load_deepmir_resnet_v3_bn_model(args, checkpoint_folder="./checkpoints", whitened_layer=None):
+    prefix_name = args.prefix[:args.prefix.rfind('_')]
+
+    if whitened_layer is None:
+        raise Exception("whitened_layer argument is required")
+    else:
+        arch = './checkpoints/presence_terminal_loop/DEEPMIR_PREMIRNA_vfinal_BN_finetune_model_best.pth.tar'
+        model = DeepMirResNetBNv3(args, model_file=arch)
+        checkpoint_name = 'presence_terminal_loop/DEEPMIR_PREMIRNA_vfinal_BN_finetune_model_best.pth.tar'
 
     model = torch.nn.DataParallel(model)
 

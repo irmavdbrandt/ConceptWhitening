@@ -66,10 +66,10 @@ def base_pairs_stem(data):
                 # U-A (green-yellow with bar length 3 for both)
                 if ((data[row_before_middle - 2][pixel_index][0] == 0) and (
                         data[row_before_middle - 2][pixel_index][1] == 255)
-                    and (data[row_before_middle - 3][pixel_index][2] == 255)) and \
+                    and (data[row_before_middle - 2][pixel_index][2] == 0)) and \
                         ((data[row_before_middle - 3][pixel_index][0] == 255) and (
                                 data[row_before_middle - 3][pixel_index][1] == 255)
-                         and (data[row_before_middle - 2][pixel_index][2] == 0)) and \
+                         and (data[row_before_middle - 3][pixel_index][2] == 255)) and \
                         ((data[row_before_middle + 3][pixel_index][0] == 255) and (
                                 data[row_before_middle + 3][pixel_index][1] == 255)
                          and (data[row_before_middle + 3][pixel_index][2] == 0)) and \
@@ -428,35 +428,47 @@ def bulge_info(bulges_list, data):
 
         # get color of pairs by checking the pixel RGB values
         nucleotide_pairs = []
+        colors = []
         for pixel in range(bulge[0], bulge[-1] + 1):
             pair = []
+            color = []
             for row in range(row_before_middle, row_before_middle + 2):
                 if ((data[row][pixel][0] == 0) and (data[row][pixel][1] == 0)
                         and (data[row][pixel][2] == 0)):
                     pair.append('gap')
+                    color.append('black')
                 else:
                     if ((data[row][pixel][0] == 255) and (data[row][pixel][1] == 0)
                             and (data[row][pixel][2] == 0)):
                         pair.append('G')
+                        color.append('red')
                     else:
                         if ((data[row][pixel][0] == 0) and (data[row][pixel][1] == 255)
                                 and (data[row][pixel][2] == 0)):
                             pair.append('U')
+                            color.append('green')
                         else:
                             if ((data[row][pixel][0] == 0) and (data[row][pixel][1] == 0)
                                     and (data[row][pixel][2] == 255)):
                                 pair.append('C')
+                                color.append('blue')
                             else:
                                 if ((data[row][pixel][0] == 255) and (data[row][pixel][1] == 255)
                                         and (data[row][pixel][2] == 0)):
                                     pair.append('A')
+                                    color.append('yellow')
             # combine the two nucleotides so that the pair is saved as ..-..
             nucleotide_pairs.append(pair[0] + "-" + pair[1])
+            colors.append(color[0] + '-' + color[1])
+
+        values, counts = np.unique(colors, return_counts=True)
+        highest_count_index = np.argmax(counts)
+        most_occuring_color = values[highest_count_index]
 
         # add all the generated info into a list and add this list to an overview list
         bulge_info_list.append([bulge, (bulge_highest_row, bulge_highest_pixel), (bulge_highest_row_lowerhalf,
                                                                                   bulge_highest_pixel_lowerhalf), width,
-                                length, nucleotide_pairs])
+                                length, nucleotide_pairs, colors, most_occuring_color])
 
     return bulge_info_list
 
@@ -820,10 +832,10 @@ def palindrome(data, start_pixel):
                 else:
                     upper_count += 1
 
+    for pixel_index in range(0, 100):
         lower_count = 0
         for row_index in range(row_before_middle + 1, 25):
-            if (data[row_index][pixel_index][0] == 255) and \
-                    (data[row_index][pixel_index][1] == 255) and \
+            if (data[row_index][pixel_index][0] == 255) and (data[row_index][pixel_index][1] == 255) and \
                     (data[row_index][pixel_index][2] == 255):
                 lower_half_counts.append(lower_count)
                 break
@@ -836,37 +848,82 @@ def palindrome(data, start_pixel):
                 else:
                     lower_count += 1
 
+    colors, occurences_colors = nucleotide_types(data)
+
     # zip the count lists and go over them to check whether the counts are equal (= symmetric structure) or not.
     # if so, add True, else, add False
     palindrome_array = []
     bulge_array = []
+    bulge_locations = []
     for pixel_upper, pixel_lower in zip(upper_half_counts, lower_half_counts):
         if pixel_upper == pixel_lower:
             palindrome_array.append(True)
             bulge_array.append(0)
+            bulge_locations.append(0)
         else:
             palindrome_array.append(False)
             # check for large asymmetric bulge
-            if (pixel_upper == 2 and pixel_lower == 12) or (pixel_upper == 12 and pixel_lower == 2):
+            if pixel_upper == 2 and pixel_lower == 12:
                 bulge_array.append(1)
+                bulge_locations.append('lower')
             else:
-                bulge_array.append(0)
+                if pixel_upper == 12 and pixel_lower == 2:
+                    bulge_array.append(1)
+                    bulge_locations.append('upper')
+                else:
+                    bulge_array.append(0)
+                    bulge_locations.append(0)
+
+    # cut the bulge_array list so that the final white pixels are removed and the length is equal to the colors list
+    bulge_array = bulge_array[0:len(colors)]
+    colors.reverse()
 
     widths = []
     width = 0
-    for i in range(len(bulge_array)-1):
+    bulge_colors = []
+    bulge_color = []
+    bulge_exact_locations = []
+    bulge_exact_location = []
+    for i in range(len(bulge_array) - 1):
         if bulge_array[i] == 1:
             width += 1
-            if bulge_array[i+1] == 0:
+            bulge_color.append(colors[i])
+            bulge_exact_location.append((bulge_locations[i], i))
+            if bulge_array[i + 1] == 0:
                 widths.append(width)
                 width = 0
+                bulge_colors.append(bulge_color)
+                bulge_color = []
+                bulge_exact_locations.append(bulge_exact_location)
+                bulge_exact_location = []
             else:
                 i += 1
 
     if widths == []:
         largest_bulge = np.nan
+        color_largest_bulge = np.nan
+        largest_bulge_location = (np.nan, np.nan)
     else:
         largest_bulge = np.max(widths)
+        largest_bulge_index = np.argmax(widths)
+        color_largest_bulge = bulge_colors[largest_bulge_index]
+        largest_bulge_location = bulge_exact_locations[largest_bulge_index]
+        middle_bulge_location = int(len(largest_bulge_location)/2)
+        largest_bulge_location = (largest_bulge_location[0][0],
+                                  largest_bulge_location[middle_bulge_location][1])
+
+        # compute the occurrence of each color wrt to the total premirna
+        color_dict = {}
+        values, counts = np.unique(color_largest_bulge, return_counts=True)
+        for value, count in zip(values, counts):
+            color_dict[value] = count / len(color_largest_bulge)
+
+        # define some way for choosing the most occuring color in a pre-mirna
+        # sort the color_dict based on the occurrence values
+        color_dict = {k: v for k, v in sorted(color_dict.items(), key=lambda item: item[1])}
+        color_largest_bulge = max(color_dict, key=color_dict.get)
+
+
 
     # divide the number of Trues/Falses by the length of the pre-miRNA
     # get the index of the first occurrence of a 0-count, this is where there are only white pixels
@@ -903,11 +960,12 @@ def palindrome(data, start_pixel):
         else:
             palindrome_score_loop = False
 
-    return palindrome_score, palindrome_score_loop, largest_bulge
+    return palindrome_score, palindrome_score_loop, largest_bulge, color_largest_bulge, largest_bulge_location
 
 
 def large_asymmetric_bulge(data, start_pixel):
-    palindrome_score, palindrome_score_loop, largest_bulge = palindrome(data, start_pixel)
+    palindrome_score, palindrome_score_loop, largest_bulge, color_largest_bulge, largest_bulge_location =\
+        palindrome(data, start_pixel)
 
     if palindrome_score[0] > 0.6:
         asymmetric = True
@@ -941,6 +999,244 @@ def AU_pairs_begin_maturemiRNA(pairs):
 
     return AU_motif
 
+
+def nucleotide_types(data):
+    """
+    :param data: image data as array
+    :return: pixel where stem begins (counting from right to left) and a list with integers [0, 3] and length equal to
+    # the length of the pre-miRNA corresponding to the pairing in the stem. (0: gap or mismatch, 1: CG/GC, 2: AU/UA,
+    3: GU/UG wobble)
+    """
+    # find the beginning pixel of the stem by looking for the first colored pixel in the row before the middle of the
+    # image and going from right to left
+    begin = 0
+    row_before_middle = 12
+    # iterate over the pixels from right to left (-1)
+    for pixel_index in range(99, -1, -1):
+        if (data[row_before_middle][pixel_index][0] == 255) and (
+                data[row_before_middle][pixel_index][1] == 255) \
+                and (data[row_before_middle][pixel_index][2] == 255):
+            pixel_index += 1
+        else:
+            begin = pixel_index
+            break
+
+    # initialize an empty list where all the pairing integers will be stored
+    colors_pairs = []
+    # iterate over the pixels from right to left starting for the beginning of the stem (-1)
+    for pixel_index in range(begin, -1, -1):
+        # C-G (blue-red with bar length 2 for both)
+        if (((data[row_before_middle][pixel_index][0] == 255) and
+             (data[row_before_middle][pixel_index][1] == 0)
+             and (data[row_before_middle][pixel_index][2] == 0)) and
+            ((data[row_before_middle + 1][pixel_index][0] == 0) and (
+                    data[row_before_middle + 1][pixel_index][1] == 0)
+             and (data[row_before_middle + 1][pixel_index][2] == 255))) \
+                or (((data[row_before_middle][pixel_index][0] == 0) and (
+                data[row_before_middle][pixel_index][1] == 0)
+                     and (data[row_before_middle][pixel_index][2] == 255)) and
+                    ((data[row_before_middle + 1][pixel_index][0] == 255) and (
+                            data[row_before_middle + 1][pixel_index][1] == 0)
+                     and (data[row_before_middle + 1][pixel_index][2] == 0))):
+            colors_pairs.append('blue-red')  # CG is referenced as 1
+        else:
+            # U-A (green-yellow with bar length 3 for both)
+            if (((data[row_before_middle][pixel_index][0] == 255) and (
+                    data[row_before_middle][pixel_index][1] == 255)
+                 and (data[row_before_middle][pixel_index][2] == 0)) and
+                ((data[row_before_middle + 1][pixel_index][0] == 0) and (
+                        data[row_before_middle + 1][pixel_index][1] == 255)
+                 and (data[row_before_middle + 1][pixel_index][2] == 0))) or \
+                    (((data[row_before_middle][pixel_index][0] == 0) and (
+                            data[row_before_middle][pixel_index][1] == 255)
+                      and (data[row_before_middle][pixel_index][2] == 0)) and
+                     ((data[row_before_middle + 1][pixel_index][0] == 255) and (
+                             data[row_before_middle + 1][pixel_index][1] == 255)
+                      and (data[row_before_middle + 1][pixel_index][2] == 0))):
+                colors_pairs.append('green-yellow')  # UA is referenced as 2
+            else:
+                # G-U wobble (red-green with length 4 for both bars)
+                if (((data[row_before_middle][pixel_index][0] == 255) and (
+                        data[row_before_middle][pixel_index][1] == 0)
+                     and (data[row_before_middle][pixel_index][2] == 0)) and
+                    ((data[row_before_middle + 1][pixel_index][0] == 0) and (
+                            data[row_before_middle + 1][pixel_index][1] == 255)
+                     and (data[row_before_middle + 1][pixel_index][2] == 0))) or \
+                        (((data[row_before_middle][pixel_index][0] == 0) and (
+                                data[row_before_middle][pixel_index][1] == 255)
+                          and (data[row_before_middle][pixel_index][2] == 0)) and
+                         ((data[row_before_middle + 1][pixel_index][0] == 255) and (
+                                 data[row_before_middle + 1][pixel_index][1] == 0)
+                          and (data[row_before_middle + 1][pixel_index][2] == 0))):
+                    colors_pairs.append('green-red')  # UG is referenced as 3
+                else:
+                    # G-A wobble (red-yellow)
+                    if (((data[row_before_middle][pixel_index][0] == 255) and (
+                            data[row_before_middle][pixel_index][1] == 0)
+                         and (data[row_before_middle][pixel_index][2] == 0)) and
+                        ((data[row_before_middle + 1][pixel_index][0] == 255) and (
+                                data[row_before_middle + 1][pixel_index][1] == 255)
+                         and (data[row_before_middle + 1][pixel_index][2] == 0))) or \
+                            (((data[row_before_middle][pixel_index][0] == 255) and (
+                                    data[row_before_middle][pixel_index][1] == 255)
+                              and (data[row_before_middle][pixel_index][2] == 0)) and
+                             ((data[row_before_middle + 1][pixel_index][0] == 255) and (
+                                     data[row_before_middle + 1][pixel_index][1] == 0)
+                              and (data[row_before_middle + 1][pixel_index][2] == 0))):
+                        colors_pairs.append('yellow-red')  # AG
+                    else:
+                        # U-C wobble (green-blue)
+                        if (((data[row_before_middle][pixel_index][0] == 0) and (
+                                data[row_before_middle][pixel_index][1] == 255)
+                             and (data[row_before_middle][pixel_index][2] == 0)) and
+                            ((data[row_before_middle + 1][pixel_index][0] == 0) and (
+                                    data[row_before_middle + 1][pixel_index][1] == 0)
+                             and (data[row_before_middle + 1][pixel_index][2] == 255))) or \
+                                (((data[row_before_middle][pixel_index][0] == 0) and (
+                                        data[row_before_middle][pixel_index][1] == 0)
+                                  and (data[row_before_middle][pixel_index][2] == 255)) and
+                                 ((data[row_before_middle + 1][pixel_index][0] == 0) and (
+                                         data[row_before_middle + 1][pixel_index][1] == 255)
+                                  and (data[row_before_middle + 1][pixel_index][2] == 0))):
+                            colors_pairs.append('blue-green')  # CU
+                        else:
+                            # A-C wobble (yellow-blue)
+                            if (((data[row_before_middle][pixel_index][0] == 255) and (
+                                    data[row_before_middle][pixel_index][1] == 255)
+                                 and (data[row_before_middle][pixel_index][2] == 0)) and
+                                ((data[row_before_middle + 1][pixel_index][0] == 0) and (
+                                        data[row_before_middle + 1][pixel_index][1] == 0)
+                                 and (data[row_before_middle + 1][pixel_index][2] == 255))) or \
+                                    (((data[row_before_middle][pixel_index][0] == 0) and (
+                                            data[row_before_middle][pixel_index][1] == 0)
+                                      and (data[row_before_middle][pixel_index][2] == 255)) and
+                                     ((data[row_before_middle + 1][pixel_index][0] == 255) and (
+                                             data[row_before_middle + 1][pixel_index][1] == 255)
+                                      and (data[row_before_middle + 1][pixel_index][2] == 0))):
+                                colors_pairs.append('blue-yellow')  # CA
+                            else:
+                                # G-G wobble (red-red)
+                                if ((data[row_before_middle][pixel_index][0] == 255) and (
+                                        data[row_before_middle][pixel_index][1] == 0)
+                                    and (data[row_before_middle][pixel_index][2] == 0)) and \
+                                        ((data[row_before_middle + 1][pixel_index][0] == 255) and (
+                                                 data[row_before_middle + 1][pixel_index][1] == 0)
+                                         and (data[row_before_middle + 1][pixel_index][2] == 0)):
+                                    colors_pairs.append('red-red')  # GG
+                                else:
+                                    # U-U wobble (green-green)
+                                    if ((data[row_before_middle][pixel_index][0] == 0) and (
+                                                data[row_before_middle][pixel_index][1] == 255)
+                                        and (data[row_before_middle][pixel_index][2] == 0)) and \
+                                            ((data[row_before_middle + 1][pixel_index][0] == 0) and (
+                                                     data[row_before_middle + 1][pixel_index][1] == 255)
+                                             and (data[row_before_middle + 1][pixel_index][2] == 0)):
+                                        colors_pairs.append('green-green')  # U-U
+                                    else:
+                                        # C-C wobble (blue-blue)
+                                        if ((data[row_before_middle][pixel_index][0] == 0) and (
+                                                    data[row_before_middle][pixel_index][1] == 0)
+                                            and (data[row_before_middle][pixel_index][2] == 255)) and \
+                                                ((data[row_before_middle + 1][pixel_index][0] == 0) and (
+                                                         data[row_before_middle + 1][pixel_index][1] == 0)
+                                                 and (data[row_before_middle + 1][pixel_index][2] == 255)):
+                                            colors_pairs.append('blue-blue')  # CC
+                                        else:
+                                            # A-A wobble (yellow-yellow)
+                                            if ((data[row_before_middle][pixel_index][0] == 255) and (
+                                                        data[row_before_middle][pixel_index][1] == 255)
+                                                and (data[row_before_middle][pixel_index][2] == 0)) and \
+                                                    ((data[row_before_middle + 1][pixel_index][0] == 255) and (
+                                                             data[row_before_middle + 1][pixel_index][1] == 255)
+                                                     and (data[row_before_middle + 1][pixel_index][2] == 0)):
+                                                colors_pairs.append('yellow-yellow')  # AA
+                                            else:
+                                                # gap-red or red-gap
+                                                if (((data[row_before_middle][pixel_index][0] == 255) and (
+                                                             data[row_before_middle][pixel_index][1] == 0)
+                                                     and (data[row_before_middle][pixel_index][2] == 0)) and
+                                                    ((data[row_before_middle + 1][pixel_index][0] == 0) and (
+                                                             data[row_before_middle + 1][pixel_index][1] == 0)
+                                                     and (data[row_before_middle + 1][pixel_index][2] == 0))) or \
+                                                        (((data[row_before_middle][pixel_index][0] == 0) and (
+                                                                  data[row_before_middle][pixel_index][1] == 0)
+                                                          and (data[row_before_middle][pixel_index][2] == 0)) and
+                                                         ((data[row_before_middle + 1][pixel_index][0] == 255) and (
+                                                                  data[row_before_middle + 1][pixel_index][1] == 0)
+                                                          and (data[row_before_middle + 1][pixel_index][2] == 0))):
+                                                    colors_pairs.append('red-gap')  # AA
+                                                else:
+                                                    # gap-blue or blue-gap
+                                                    if (((data[row_before_middle][pixel_index][0] == 0) and (
+                                                            data[row_before_middle][pixel_index][1] == 0)
+                                                         and (data[row_before_middle][pixel_index][2] == 255)) and
+                                                        ((data[row_before_middle + 1][pixel_index][0] == 0) and (
+                                                                data[row_before_middle + 1][pixel_index][1] == 0)
+                                                         and (data[row_before_middle + 1][pixel_index][2] == 0))) or \
+                                                            (((data[row_before_middle][pixel_index][0] == 0) and (
+                                                                    data[row_before_middle][pixel_index][1] == 0)
+                                                              and (data[row_before_middle][pixel_index][2] == 0)) and
+                                                             ((data[row_before_middle + 1][pixel_index][0] == 0) and (
+                                                                     data[row_before_middle + 1][pixel_index][1] == 0)
+                                                              and (data[row_before_middle + 1][pixel_index][2] == 255))):
+                                                        colors_pairs.append('blue-gap')  # AA
+                                                    else:
+                                                        # gap-green or green-gap
+                                                        if (((data[row_before_middle][pixel_index][0] == 0) and (
+                                                                data[row_before_middle][pixel_index][1] == 255)
+                                                             and (data[row_before_middle][pixel_index][2] == 0)) and
+                                                            ((data[row_before_middle + 1][pixel_index][0] == 0) and (
+                                                                    data[row_before_middle + 1][pixel_index][1] == 0)
+                                                             and (data[row_before_middle + 1][pixel_index][2] == 0))) or \
+                                                                (((data[row_before_middle][pixel_index][0] == 0) and (
+                                                                        data[row_before_middle][pixel_index][1] == 0)
+                                                                  and (data[row_before_middle][pixel_index][
+                                                                           2] == 0)) and
+                                                                 ((data[row_before_middle + 1][pixel_index][
+                                                                       0] == 0) and (
+                                                                          data[row_before_middle + 1][pixel_index][
+                                                                              1] == 255)
+                                                                  and (data[row_before_middle + 1][pixel_index][
+                                                                           2] == 0))):
+                                                            colors_pairs.append('green-gap')  # AA
+                                                        else:
+                                                            # gap-yellow or yellow-gap
+                                                            if (((data[row_before_middle][pixel_index][0] == 255) and (
+                                                                    data[row_before_middle][pixel_index][1] == 255)
+                                                                 and (data[row_before_middle][pixel_index][2] == 0)) and
+                                                                ((data[row_before_middle + 1][pixel_index][
+                                                                      0] == 0) and (
+                                                                         data[row_before_middle + 1][pixel_index][
+                                                                             1] == 0)
+                                                                 and (data[row_before_middle + 1][pixel_index][
+                                                                          2] == 0))) or \
+                                                                    (((data[row_before_middle][pixel_index][
+                                                                           0] == 0) and (
+                                                                              data[row_before_middle][pixel_index][
+                                                                                  1] == 0)
+                                                                      and (data[row_before_middle][pixel_index][
+                                                                               2] == 0)) and
+                                                                     ((data[row_before_middle + 1][pixel_index][
+                                                                           0] == 255) and (
+                                                                              data[row_before_middle + 1][pixel_index][
+                                                                                  1] == 255)
+                                                                      and (data[row_before_middle + 1][pixel_index][
+                                                                               2] == 0))):
+                                                                colors_pairs.append('yellow-gap')  # AA
+
+    # compute the occurrence of each color wrt to the total premirna
+    color_dict = {}
+    values, counts = np.unique(colors_pairs, return_counts=True)
+    for value, count in zip(values, counts):
+        color_dict[value] = count/len(colors_pairs)
+
+    # define some way for choosing the most occuring color in a pre-mirna
+    # sort the color_dict based on the occurrence values
+    color_dict = {k: v for k, v in sorted(color_dict.items(), key=lambda item: item[1])}
+
+    return colors_pairs, color_dict
+
+
 # %%
 # do some checking to see whether the new definitions are okay
 # positive class tests
@@ -951,7 +1247,7 @@ def AU_pairs_begin_maturemiRNA(pairs):
 # image = './modhsa_original/original_dataset/test/1/hsa-mir-9-1.png'
 # image = './modhsa_original/original_dataset/test/1/hsa-mir-15b.png'
 # image = './modhsa_original/original_dataset/train/1/hsa-mir-6126.png'
-# image = './modhsa_original/original_dataset/test/1/hsa-mir-4692.png'
+image = './modhsa_original/original_dataset/test/1/hsa-mir-4692.png'
 #
 
 # negative class tests
@@ -959,7 +1255,7 @@ def AU_pairs_begin_maturemiRNA(pairs):
 # image = './modhsa_original/original_dataset/test/0/19.png'
 # image = './modhsa_original/original_dataset/test/0/hsa1_4934.png'
 # image = './modhsa_original/original_dataset/test/0/1409.png'
-image = './modhsa_original/original_dataset/test/0/320.png'
+# image = './modhsa_original/original_dataset/test/0/320.png'
 # image = './modhsa_original/original_dataset/test/0/556.png'
 # image = './modhsa_original/original_dataset/test/0/709.png'
 #
@@ -978,6 +1274,10 @@ terminal_loop_present, start_row, start_pixel, highest_row, highest_pixel, lengt
 ugu_combined = ugu_motif(image_array, terminal_loop_present, highest_pixel, start_pixel)
 symmetric_bulges_list, asymmetric_bulges_list, symmetric_bulge_info_list, asymmetric_bulge_info_list = \
     bulges(image_array, base_pairs, start_pixel, stem_begin)
-palindrome_score, palindrome_loop, largest_bulge = palindrome(image_array, start_pixel)
+palindrome_score, palindrome_loop, largest_bulge, color_largest_bulge, largest_bulge_location = \
+    palindrome(image_array, start_pixel)
 AU_pair = AU_pairs_begin_maturemiRNA(base_pairs)
 large_asymmetric_bulge(image_array, start_pixel)
+colors, color_occurrence = nucleotide_types(image_array)
+
+print((base_pairs.count(1) + base_pairs.count(2) + base_pairs.count(3)) / (stem_begin - start_pixel))

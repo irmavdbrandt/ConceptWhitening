@@ -37,8 +37,6 @@ parser.add_argument('--whitened_layers', default='8')
 parser.add_argument('--act_mode', default='pool_max')
 parser.add_argument('--depth', default=18, type=int, metavar='D',
                     help='model depth')
-parser.add_argument('--ngpu', default=4, type=int, metavar='G',
-                    help='number of gpus to use')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=100, type=int, metavar='N',
@@ -76,7 +74,6 @@ def main():
     print("args", args)
 
     torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
     random.seed(args.seed)
 
     args.prefix += '_' + '_'.join(args.whitened_layers.split(','))
@@ -111,14 +108,14 @@ def main():
     # print(args.start_epoch, args.best_prec1)
 
     # define loss function (criterion) and optimizer
-    criterion = nn.CrossEntropyLoss().cuda()
+    criterion = nn.CrossEntropyLoss()
     # param_list = get_param_list_bn(model)
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
 
-    model = torch.nn.DataParallel(model, device_ids=list(range(args.ngpu)))
-    model = model.cuda()
+    model = torch.nn.DataParallel(model)
+    model = model
     print("model")
     print(model)
 
@@ -130,17 +127,13 @@ def main():
 
     # Data loading code
     traindir = os.path.join(args.data, 'train')
-    valdir = os.path.join(args.data, 'val')
-    testdir = os.path.join(args.data, 'test')
-    conceptdir_train = os.path.join(args.data, 'preparation/datasets/modhsa_original/concept_train')
-    conceptdir_test = os.path.join(args.data, 'preparation/datasets/modhsa_original/concept_test')
+    conceptdir_train = os.path.join(args.data, 'concept_train')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
     train_loader = torch.utils.data.DataLoader(
         datasets.ImageFolder(traindir, transforms.Compose([
-            transforms.RandomSizedCrop(224),
-            transforms.RandomHorizontalFlip(),
+            transforms.RandomResizedCrop(224),
             transforms.ToTensor(),
             normalize,
         ])),
@@ -150,8 +143,7 @@ def main():
     concept_loaders = [
         torch.utils.data.DataLoader(
             datasets.ImageFolder(os.path.join(conceptdir_train, concept), transforms.Compose([
-                transforms.RandomSizedCrop(224),
-                transforms.RandomHorizontalFlip(),
+                transforms.RandomResizedCrop(224),
                 transforms.ToTensor(),
                 normalize,
             ])),
@@ -160,53 +152,12 @@ def main():
         for concept in args.concepts.split(',')
     ]
 
-    val_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(valdir, transforms.Compose([
-            transforms.Scale(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ])),
-        batch_size=args.batch_size, shuffle=True,
-        num_workers=args.workers, pin_memory=False)
-
-    val_loader_2 = torch.utils.data.DataLoader(
-        datasets.ImageFolder(
-            '/usr/xtmp/zhichen/ConceptWhitening_git/ConceptWhitening/plot/airplane_bed_bench_boat_book_horse_person/resnet_cw18/1_rot_cw_top5',
-            transforms.Compose([
-                transforms.Scale(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize,
-            ])),
-        batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=False)
-
-    test_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(testdir, transforms.Compose([
-            transforms.Scale(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ])),
-        batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=False)
-
-    test_loader_with_path = torch.utils.data.DataLoader(
-        ImageFolderWithPaths(testdir, transforms.Compose([
-            transforms.Scale(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ])),
-        batch_size=args.batch_size, shuffle=True,
-        num_workers=args.workers, pin_memory=False)
-
     if args.evaluate == False:
         print("Start training")
         best_prec1 = 0
         for epoch in range(args.start_epoch, args.start_epoch + 4):
             adjust_learning_rate(optimizer, epoch)
+            print('here')
 
             # train for one epoch
             if args.arch == "resnet_cw":
@@ -214,7 +165,7 @@ def main():
             elif args.arch == "resnet_baseline":
                 train_baseline(train_loader, concept_loaders, model, criterion, optimizer, epoch)
             # evaluate on validation set
-            prec1 = validate(val_loader, model, criterion, epoch)
+            prec1 = validate(train_loader, model, criterion, epoch)
 
             # remember best prec@1 and save checkpoint
             is_best = prec1 > best_prec1
@@ -227,7 +178,7 @@ def main():
                 'optimizer': optimizer.state_dict(),
             }, is_best, args.prefix)
         print(best_prec1)
-        validate(test_loader, model, criterion, epoch)
+        validate(train_loader, model, criterion, epoch)
     else:
         # model = load_resnet_model(args, arch = 'resnet_baseline', depth=args.depth, whitened_layer=args.whitened_layers)
         # print('resnet_orginal')
@@ -271,9 +222,11 @@ def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
 
     # switch to train mode
     model.train()
+    print('started')
 
     end = time.time()
     for i, (input, target) in enumerate(train_loader):
+        print('input laoded')
         # if (i + 1) % 800 == 0:
         #     break
         if (i + 1) % 30 == 0:
@@ -283,7 +236,7 @@ def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
                 for concept_index, concept_loader in enumerate(concept_loaders):
                     model.module.change_mode(concept_index)
                     for j, (X, _) in enumerate(concept_loader):
-                        X_var = torch.autograd.Variable(X).cuda()
+                        X_var = torch.autograd.Variable(X)
                         model(X_var)
                         break
                 model.module.update_rotation_matrix()
@@ -294,7 +247,7 @@ def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
         # measure data loading time
         data_time.update(time.time() - end)
 
-        target = target.cuda()
+        target = target
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
 
@@ -339,7 +292,7 @@ def validate(val_loader, model, criterion, epoch):
     end = time.time()
     with torch.no_grad():
         for i, (input, target) in enumerate(val_loader):
-            target = target.cuda()
+            target = target
             input_var = torch.autograd.Variable(input)
             target_var = torch.autograd.Variable(target)
 
