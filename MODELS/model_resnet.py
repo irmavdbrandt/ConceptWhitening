@@ -17,7 +17,7 @@ def maxpool_2x2():
 
 
 class DeepMir_v2(nn.Module):
-    """Version of DeepMir model that includes BN layers + ReLU activations instead of dropout ones"""
+    """Version of DeepMir model that includes BN layers + ReLU activations_test instead of dropout ones"""
     def __init__(self) -> None:
         super(DeepMir_v2, self).__init__()
         self.conv1 = nn.Conv2d(3, 48, kernel_size=3, stride=(1, 1))
@@ -160,8 +160,8 @@ class DeepMir_v2_Transfer(nn.Module):
 
 
 class DeepMir_vfinal(nn.Module):
-    """Version of DeepMir model that includes BN layers + ReLU activations instead of dropout ones, as well as the mean
-    max pool operation after the conv base. This model is the final model used in the experiments."""
+    """Version of DeepMir model that includes BN layers + ReLU activations_test instead of dropout ones, as well as the
+    mean max pool operation after the conv base. This model is the final model used in the experiments."""
 
     def __init__(self) -> None:
         super(DeepMir_vfinal, self).__init__()
@@ -191,7 +191,7 @@ class DeepMir_vfinal(nn.Module):
         self.pool4 = nn.MaxPool2d(kernel_size=(2, 2), stride=(1, 1))
 
         self.dropout = nn.Dropout(p=0.5)
-        self.linear2 = nn.Linear(72, 2)
+        self.linear2 = nn.Linear(72, 2)  # note: if you want a 1-node output than the 2 has to changed into a 1
 
     def forward(self, x: Tensor) -> Tensor:
         out = self.conv1(x)
@@ -304,4 +304,3 @@ class DeepMir_vfinal_Transfer(nn.Module):
     def forward(self, x):
         """forward pass of model, the pass is defined in iterative_normalization.py"""
         return self.model(x)
-

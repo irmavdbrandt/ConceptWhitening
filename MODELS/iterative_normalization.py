@@ -141,7 +141,7 @@ class IterNormRotation(torch.nn.Module):
     """
     Concept Whitening Module
     The Whitening part is adapted from IterNorm. The core of CW module is learning
-    an extra rotation matrix R that align target concepts with the output feature
+    an extra rotation matrix R that align target concepts with the predictions_test feature
     maps.
 
     Because the concept activation is calculated based on a feature map, which

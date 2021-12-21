@@ -5,7 +5,8 @@ import time
 import torch.nn.parallel
 import torch.optim
 import torch.utils.data
-from plot_functions import *
+from plot_functions_cw import *
+from helper_functions import *
 from PIL import ImageFile
 import neptune.new as neptune
 from access_keys import neptune_key
@@ -17,7 +18,6 @@ run = neptune.init(project='irmavdbrandt/Interpret-rna',
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 parser = argparse.ArgumentParser(description='PyTorch premiRNA Training')
-parser.add_argument('data', metavar='DIR', help='path to dataset')
 parser.add_argument('--arch', '-a', metavar='ARCH', default='deepmir')
 parser.add_argument('--whitened_layers', default='6')
 parser.add_argument('--act_mode', default='pool_max')
@@ -29,9 +29,11 @@ parser.add_argument('-b', '--batch-size', default=56, type=int, metavar='BS', he
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float, metavar='LR', help='initial learning rate')
 parser.add_argument('--concepts', type=str)
 parser.add_argument('--print-freq', '-p', default=10, type=int, metavar='N', help='print frequency (default: 10)')
-parser.add_argument('--resume', default='', type=str, metavar='PATH', help='path to latest checkpoint (default: none)')
+parser.add_argument('--checkpoint_name', default='', type=str, metavar='PATH', help='path to latest checkpoint '
+                                                                                    '(default: none)')
 parser.add_argument("--seed", type=int, default=1234, metavar='S', help='randomization seed')
 parser.add_argument("--prefix", type=str, required=True, metavar='PFX', help='prefix for logging & checkpoint saving')
+parser.add_argument('--data', metavar='DIR', help='path to dataset')
 parser.add_argument('--type_training', type=str, dest='type_training', help='desired type of training (pre-training, '
                                                                             'fine-tuning, CW, evaluation')
 parser.add_argument('--foldn_bestmodel', type=str, default=0, help='data fold with best results during training')
@@ -43,7 +45,7 @@ if not os.path.exists('./checkpoints'):
 
 
 def main():
-    global args, best_prec1
+    global args, best_acc
     args = parser.parse_args()
     print("args", args)
 
@@ -51,7 +53,7 @@ def main():
     criterion = nn.CrossEntropyLoss()
 
     # training initialization
-    if (args.type_training != 'evaluate') and (args.type_training != 'activations_tree_train'):
+    if (args.type_training != 'evaluate') and (args.type_training != 'get_activations'):
         #  specifies which type of training is desired
         if args.type_training == "finetune" or args.type_training == "pretrain":
             # initialize empty model
@@ -60,14 +62,13 @@ def main():
             if args.type_training == 'finetune':
                 if args.arch == 'deepmir_v2_bn':
                     # change the model file to the file with the desired pre-training weights
-                    model = DeepMir_v2_BN(args, model_file='checkpoints/deepmir_v2_bn/DEEPMIR_PREMIRNA_v2_pretrain_BN_'
+                    model = DeepMir_v2_BN(args, model_file='checkpoints/deepmir_v2_bn/DEEPMIR_v2_pretrain_BN_'
                                                            'checkpoint.pth.tar')
                 elif args.arch == 'deepmir_vfinal_bn':
                     # change the model file to the file with the desired pre-training weights
                     # model file below is the one reported in the thesis report
-                    model = DeepMir_vfinal_BN(args, model_file='checkpoints/deepmir_vfinal_bn/DEEPMIR_PREMIRNA_vfinal_'
-                                                               'BN_checkpoint.pth.tar'
-                                              )
+                    model = DeepMir_vfinal_BN(args, model_file='checkpoints/deepmir_vfinal_bn/DEEPMIR_vfinal_'
+                                                               'BN_pretrain_checkpoint.pth.tar')
             else:
                 # if pre-training, we need to initialize the model with random weights
                 if args.arch == 'deepmir_v2_bn':
@@ -90,28 +91,22 @@ def main():
             traindir = os.path.join(args.data, 'train')
             test_loader = None
             if args.type_training == 'finetune':
-                testdir = os.path.join(args.data, 'test')
-                # create balanced data loader for the test set using class weights calculated on the test set
-                test_loader = torch.utils.data.DataLoader(
-                    datasets.ImageFolder(testdir, transforms.Compose([
-                        transforms.ToTensor(),
-                    ])),
-                    batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
+                test_loader = create_data_loader(os.path.join(args.data, 'test'), False)
 
             # create a balanced data loader for the training set using class weights calculated on the training set
             train_loader = balanced_data_loader(args, traindir)
 
             # set the best accuracy so far to 0 before starting the training
-            best_prec1 = 0
+            best_acc = 0
             for epoch in range(args.start_epoch, args.start_epoch + args.epochs):
                 train_loss, train_acc = train_baseline(train_loader, model, criterion, optimizer, epoch)
 
                 # evaluate on validation set
                 if args.type_training == 'finetune':
-                    prec1, val_loss = validate(test_loader, model, criterion)
+                    acc, val_loss = validate(test_loader, model, criterion)
                 else:
                     # if pre-training without test set, evaluate on the training set
-                    prec1, val_loss = validate(train_loader, model, criterion)
+                    acc, val_loss = validate(train_loader, model, criterion)
 
                 # neptune logging metrics
                 # Log epoch loss
@@ -121,24 +116,37 @@ def main():
                 # Log epoch loss
                 run[f"validation/loss"].log(val_loss)
                 # Log epoch accuracy
-                run[f"validation/acc"].log(prec1)
+                run[f"validation/acc"].log(acc)
 
-                # remember best prec-1 and save checkpoint for this model
-                is_best = prec1 > best_prec1
-                best_prec1 = max(prec1, best_prec1)
+                # remember best accuracy (or precision) and save checkpoint for this model
+                is_best = acc > best_acc
+                best_acc = max(acc, best_acc)
                 save_checkpoint({
                     'epoch': epoch + 1,
                     'arch': args.arch,
                     'state_dict': model.state_dict(),
-                    'best_prec1': best_prec1,
+                    'best_prec1': best_acc,
                     'optimizer': optimizer.state_dict(),
                 }, is_best, args.prefix, fold_n=None)
 
-                print('Best accuracy so far: ', best_prec1)
-                print('Accuracy current fold: ', prec1)
+                print('Best accuracy so far: ', best_acc)
+                print('Accuracy current fold: ', acc)
 
             # stop the neptune logging
             run.stop()
+
+            if args.type_training == "finetune":
+                dst = './plot/' + '/' + args.arch + '/'
+                if not os.path.exists(dst):
+                    os.mkdir(dst)
+                # create a data loader for the test set that includes the image paths
+                test_loader_with_path = torch.utils.data.DataLoader(
+                    ImageFolderWithPaths(os.path.join(args.data, 'test'),
+                                         transforms.Compose([transforms.ToTensor(), ])),
+                    batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
+
+                print("Plot correlation BN layer in non-CW model")
+                plot_correlation(dst, args, test_loader_with_path, model, args.whitened_layers)
 
         elif args.type_training == 'cw':
             args.prefix += '_' + '_'.join(args.whitened_layers.split(','))
@@ -155,14 +163,12 @@ def main():
                 model = None
                 if args.arch == 'deepmir_v2_cw':
                     model = DeepMir_v2_Transfer(args, [int(x) for x in args.whitened_layers.split(',')],
-                                                model_file='checkpoints/deepmir_v2_bn/'
-                                                           'DEEPMIR_PREMIRNA_v2_BN_finetune_checkpoint.pth.tar'
-                                                )
+                                                model_file='checkpoints/deepmir_v2_bn/DEEPMIR_v2_BN_finetune_'
+                                                           'checkpoint.pth.tar')
                 elif args.arch == "deepmir_vfinal_cw":
                     model = DeepMir_vfinal_Transfer(args, [int(x) for x in args.whitened_layers.split(',')],
                                                     model_file='checkpoints/deepmir_vfinal_bn/DEEPMIR_'
-                                                               'PREMIRNA_vfinal_BN_finetune_model_best.pth.tar'
-                                                    )
+                                                               'vfinal_BN_finetune_model_best.pth.tar')
 
                 # define optimizer
                 optimizer = torch.optim.Adam(model.parameters(), args.lr)
@@ -187,24 +193,17 @@ def main():
                 concept_loaders = [
                     torch.utils.data.DataLoader(
                         datasets.ImageFolder(os.path.join(conceptdir_train, concept), transforms.Compose([
-                            transforms.ToTensor(),
-                        ])),
+                            transforms.ToTensor(), ])),
                         batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=False)
                     for concept in args.concepts.split(',')
                 ]
 
                 # create balanced data loader for the test set using class weights calculated on the test set
-                val_loader = torch.utils.data.DataLoader(
-                    datasets.ImageFolder(valdir, transforms.Compose([
-                        transforms.ToTensor(),
-                    ])),
-                    batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
+                val_loader = create_data_loader(valdir, False)
 
                 # create another data loader for the test set that includes the image paths
                 val_loader_with_path = torch.utils.data.DataLoader(
-                    ImageFolderWithPaths(valdir, transforms.Compose([
-                        transforms.ToTensor(),
-                    ])),
+                    ImageFolderWithPaths(valdir, transforms.Compose([transforms.ToTensor(), ])),
                     batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
 
                 # neptune parameter configuration
@@ -216,7 +215,7 @@ def main():
                 run['config/batchsize'] = args.batch_size
 
                 print("Start training")
-                best_prec1 = 0  # best top-1 precision = top-1 accuracy
+                best_acc = 0
                 accuracies = []
                 val_losses = []
                 train_acc = None
@@ -248,9 +247,9 @@ def main():
                     # Log fold accuracy
                     run[f"validation/{fold}/acc"].log(val_acc)
 
-                    # remember best prec-1 and save checkpoint for this model
-                    is_best = val_acc > best_prec1
-                    best_prec1 = max(val_acc, best_prec1)
+                    # remember best accuracy (or precision) and save checkpoint for this model
+                    is_best = val_acc > best_acc
+                    best_acc = max(val_acc, best_acc)
                     # do not save models before the first 10 epochs (these models tend to not yet have learned any
                     # concepts but do have high accuracy due to the use of pretraining weights)
                     if epoch < args.start_epoch + 5:
@@ -260,11 +259,11 @@ def main():
                             'epoch': epoch + 1,
                             'arch': args.arch,
                             'state_dict': model.state_dict(),
-                            'best_prec1': best_prec1,
+                            'best_prec1': best_acc,
                             'optimizer': optimizer.state_dict(),
                         }, is_best, args.prefix, fold_n=fold)
 
-                    print('Best accuracy so far: ', best_prec1)
+                    print('Best accuracy so far: ', best_acc)
                     print('Accuracy current fold: ', val_acc)
 
                     # add early stopping criteria: if the loss on the validation set has not improved over the last 10
@@ -304,8 +303,15 @@ def main():
                 if not os.path.exists(dir_fold):
                     os.mkdir(dir_fold)
 
-                mean_correlation = plot_correlation(args, val_loader_with_path, model, layer=args.whitened_layers,
-                                                    evaluate=args.type_training, fold=str(fold))
+                # create directory where plots will be stored
+                dst = './plot/' + '_'.join(args.concepts.split(',')) + '/validation/' + str(fold) + '/' + args.arch \
+                      + '/'
+                if not os.path.exists(dst):
+                    os.mkdir(dst)
+
+                # plot the correlation between the different neurons in the CW layer in a heatmap and collect the
+                # correlation values
+                mean_correlation = plot_correlation(dst, args, val_loader_with_path, model, args.whitened_layers)
                 # Neptune logging: log decorrelation of trained model on fold x
                 run[f"validation/correlation"].log(mean_correlation)
                 correlations.append(mean_correlation)
@@ -313,43 +319,31 @@ def main():
                 print("std correlations on validation set: ", np.std(correlations))
                 print('Min correlation on validation set: ', np.min(correlations), 'index: ', np.argmin(correlations))
 
-                print("Plot top50 activated images")
-                plot_concept_top50(args, val_loader_with_path, model, args.whitened_layers, False,
-                                   activation_mode=args.act_mode, evaluate=args.type_training, fold=str(fold))
-                plot_top10(args, plot_cpt=args.concepts.split(','), layer=args.whitened_layers,
-                           evaluate=args.type_training,
-                           fold=str(fold))
+                print("Collect 50 most activated images and plot the top 10")
+                plot_concept_top50(args, val_loader_with_path, model, args.whitened_layers, False, args.act_mode, dst)
+                plot_top10(args.concepts.split(','), args.whitened_layers, args.type_training, dst)
 
             # stop the neptune logging
             run.stop()
 
-    # get activations after the cw layer on the complete training dataset
-    elif args.type_training == 'activations_tree_train':
-        # create path links to data directories
-        traindir = os.path.join(args.data, 'train')
-
-        # create balanced data loader for the test set using class weights calculated on the test set
-        train_loader = torch.utils.data.DataLoader(
-            datasets.ImageFolder(traindir, transforms.Compose([
-                transforms.ToTensor(),
-            ])),
-            batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
-
-        # create another data loader for the test set that includes the image paths
+    # get activations after the cw layer on the complete training and test dataset
+    elif args.type_training == 'get_activations':
+        # create a data loader for the training set that includes the image paths
         train_loader_with_path = torch.utils.data.DataLoader(
-            ImageFolderWithPaths(traindir, transforms.Compose([
-                transforms.ToTensor(),
-            ])),
+            ImageFolderWithPaths(os.path.join(args.data, 'train'), transforms.Compose([transforms.ToTensor(), ])),
             batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
 
-        model = load_deepmir_resnet_cw_v3_model(args, checkpoint_folder="./checkpoints",
-                                                whitened_layer=args.whitened_layers, fold_n=args.foldn_bestmodel,
-                                                checkpoint_name=args.resume)
-        print("Start testing")
-        validate(train_loader, model, criterion)
-        print("Save activations relu after cw layer and pool function")
-        get_activations_finalpart(args, train_loader_with_path, model, args.whitened_layers,
-                                  type_training=args.type_training, num_neurons_cwlayer=72)
+        # create a data loader for the test set that includes the image paths
+        test_loader_with_path = torch.utils.data.DataLoader(
+            ImageFolderWithPaths(os.path.join(args.data, 'test'), transforms.Compose([transforms.ToTensor(), ])),
+            batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
+
+        model = load_deepmir_model(args, whitened_layer=args.whitened_layers, checkpoint_name=args.checkpoint_name)
+
+        print("Save activation values after CW layer for training set instances")
+        get_activations_CWlayer(args, train_loader_with_path, model, args.whitened_layers, args.type_training, 72)
+        print("Save activation values after CW layer for test set instances")
+        get_activations_CWlayer(args, test_loader_with_path, model, args.whitened_layers, args.type_training, 72)
 
     elif args.type_training == 'evaluate':
         # create path links to data directories
@@ -357,71 +351,34 @@ def main():
         conceptdir_test = os.path.join(args.data, 'concept_test')
 
         # create balanced data loader for the test set using class weights calculated on the test set
-        test_loader = torch.utils.data.DataLoader(
-            datasets.ImageFolder(testdir, transforms.Compose([
-                transforms.ToTensor(),
-            ])),
-            batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
+        test_loader = create_data_loader(testdir, False)
 
         # create another data loader for the test set that includes the image paths
         test_loader_with_path = torch.utils.data.DataLoader(
-            ImageFolderWithPaths(testdir, transforms.Compose([
-                transforms.ToTensor(),
-            ])),
+            ImageFolderWithPaths(testdir, transforms.Compose([transforms.ToTensor(), ])),
             batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
 
-        model = None
-        if args.arch == "deepmir_resnet_cw":
-            model = load_deepmir_resnet_model(args, arch=args.arch, whitened_layer=args.whitened_layers)
-        elif args.arch == "deepmir_resnet_bn":
-            model = load_deepmir_resnet_bn_model(args, whitened_layer=args.whitened_layers)
-        elif args.arch == "resnet_cw":
-            model = load_resnet_model(args, checkpoint_folder="./checkpoints", whitened_layer=args.whitened_layers)
-        elif args.arch == "deepmir_resnet_cw_v2":
-            model = load_deepmir_resnet_cw_v2_model(args, checkpoint_folder="./checkpoints",
-                                                    whitened_layer=args.whitened_layers, fold_n=args.foldn_bestmodel)
-        elif args.arch == "deepmir_resnet_cw_v3":
-            model = load_deepmir_resnet_cw_v3_model(args, checkpoint_folder="./checkpoints",
-                                                    whitened_layer=args.whitened_layers, fold_n=args.foldn_bestmodel,
-                                                    checkpoint_name=args.resume)
-        elif args.arch == "deepmir_resnet_bn_v2":
-            model = load_deepmir_resnet_v2_bn_model(args, whitened_layer=args.whitened_layers)
-        elif args.arch == "deepmir_resnet_bn_v3":
-            model = load_deepmir_resnet_v3_bn_model(args, whitened_layer=args.whitened_layers)
-
-        # cannot invoke validation before the concept importance is calculated (because that uses a backward pass..)
-        print("Start Plotting")
-        if not os.path.exists('./plot/' + '_'.join(args.concepts.split(','))):
-            os.mkdir('./plot/' + '_'.join(args.concepts.split(',')))
+        model = load_deepmir_model(args, whitened_layer=args.whitened_layers, checkpoint_name=args.checkpoint_name)
 
         print("Start testing")
         validate(test_loader, model, criterion)
-        print("Save activations relu after cw layer and relu after linear1")
-        # get_activations_finalpart(args, test_loader_with_path, model, args.whitened_layers,
-        #                           type_training=args.type_training, num_neurons_cwlayer=72)
-        plot_figures(args, model, test_loader_with_path, conceptdir_test, test_loader, criterion)
-        #
-        # print("Plot tree showing the activations of the concepts for the test images")
-        # # todo: try to automate the learnable concepts part by using the AUC thresholds or something
-        # tree_explainer(cpt=args.concepts, arch=args.arch, layer=args.whitened_layers,
-        #                learnable_cpt=["large_asymmetric_bulge", "base_pairs_wobbles_in_stem"])
-        #
-        # print("Concept importance for targets")
-        # # CAREFUL: only call this function when loading the model inside the function or after the other testing,
-        # # otherwise the model that is used for the other testing is altered due to the extra backward pass done in this
-        # # function for computing the gradients of the concept vectors
-        # if len(args.whitened_layers) > 1:
-        #     whitened_layers = [int(x) for x in args.whitened_layers.split(',')]
-        #     for layer in whitened_layers:
-        #         concept_gradient_importance(args, test_loader, layer, num_classes=2)
-        # else:
-        #
-        #     concept_gradient_importance(args, test_loader, layer=args.whitened_layers, num_classes=2)
+        print("Start Plotting")
+        if not os.path.exists('./plot/' + '_'.join(args.concepts.split(','))):
+            os.mkdir('./plot/' + '_'.join(args.concepts.split(',')))
+        plot_figures(args, model, test_loader_with_path, conceptdir_test)
 
-        #
-        # don't know what to do with the function below?
-        # get_representation_distance_to_center(args, test_loader, args.whitened_layers, arch='deepmir_resnet_cw',
-        #                                       model=model)
+
+def create_data_loader(directory, shuffle):
+    """
+    :param directory: folder (or directory) where data is stored
+    :param shuffle: where the data should be shuffled by the loader
+    :return: torch data loader object
+    """
+    data_loader = torch.utils.data.DataLoader(
+        datasets.ImageFolder(directory, transforms.Compose([transforms.ToTensor(), ])),
+        batch_size=args.batch_size, shuffle=shuffle, num_workers=args.workers, pin_memory=False)
+
+    return data_loader
 
 
 def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
@@ -468,17 +425,17 @@ def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
         # the hooks are used to track the gradient updates in layers that have hooks
         input_var = torch.autograd.Variable(input_img)
         target_var = torch.autograd.Variable(target)
-        output = model(input_var)  # compute model output
-        # activate these lines in case of model with 1 output neuron
+        output = model(input_var)  # compute model predictions_test
+        # activate these lines in case of model with 1 predictions_test neuron
         # target_var = target_var.unsqueeze(1)
         # target_var = target_var.float()
         # ###########
         loss = criterion(output, target_var)  # update the loss function
         # measure accuracy and record loss
-        [prec1] = accuracy(output.data, target, topk=(1,))
+        [acc] = accuracy(output.data, target, topk=(1,))
 
         losses.update(loss.data, input_img.size(0))
-        top1.update(prec1.item(), input_img.size(0))
+        top1.update(acc.item(), input_img.size(0))
         # compute gradient and do loss step
         optimizer.zero_grad()
         loss.backward()
@@ -492,9 +449,9 @@ def train(train_loader, concept_loaders, model, criterion, optimizer, epoch):
                   f'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   f'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   f'Loss {losses.val:.4f} ({losses.avg:.4f})\t'
-                  f'Prec@1 {top1.val:.3f} ({top1.avg:.3f})')
+                  f'Accuracy {top1.val:.3f} ({top1.avg:.3f})')
 
-    print(' * Prec@1 {top1.avg:.3f}'.format(top1=top1))
+    print(' * Accuracy {top1.avg:.3f}'.format(top1=top1))
 
     return top1.avg, losses.avg
 
@@ -521,19 +478,19 @@ def validate(test_loader, model, criterion):
             # the hooks are used to track the gradient updates in layers that have hooks
             input_var = torch.autograd.Variable(input_img)
             target_var = torch.autograd.Variable(target)
-            output = model(input_var)  # compute model output
+            output = model(input_var)  # compute model predictions_test
             # save the predictions in case we are dealing with the test set (they are used for explainability)
             if (args.type_training == 'evaluate') or (args.type_training == 'activations_tree_train'):
                 predictions.append(output.data.detach().numpy())
-            # activate these lines in case of model with 1 output neuron
+            # activate these lines in case of model with 1 predictions_test neuron
             # target_var = target_var.unsqueeze(1)
             # target_var = target_var.float()
             # ###########
             loss = criterion(output, target_var)  # update the loss function
             # measure accuracy and record loss
-            [prec1] = accuracy(output.data, target, topk=(1,))
+            [acc] = accuracy(output.data, target, topk=(1,))
             losses.update(loss.data, input_img.size(0))
-            top1.update(prec1.item(), input_img.size(0))
+            top1.update(acc.item(), input_img.size(0))
 
             # measure elapsed time
             batch_time.update(time.time() - end)
@@ -543,17 +500,23 @@ def validate(test_loader, model, criterion):
                 print(f'Test: [{i}/{len(test_loader)}]\t'
                       f'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       f'Loss {losses.val:.4f} ({losses.avg:.4f})\t'
-                      f'Prec@1 {top1.val:.3f} ({top1.avg:.3f})')
+                      f'Accuracy {top1.val:.3f} ({top1.avg:.3f})')
 
-    print(' * Prec@1 {top1.avg:.3f}'.format(top1=top1))
+    print(' * Accuracy {top1.avg:.3f}'.format(top1=top1))
 
     # save the predictions in case we are dealing with the test set (they are used for explainability)
     if args.type_training == 'evaluate':
+        dst = './output/predictions/' + '_'.join(args.concepts.split(',')) + '/'
+        if not os.path.exists(dst):
+            os.mkdir(dst)
         # save predictions for creating decision tree / decision rules
-        np.save('./output/' + '_'.join(args.concepts.split(',')), predictions)
-    elif args.type_training == 'activations_tree_train':
+        np.save(dst + 'predictions_test', predictions)
+    elif args.type_training == 'get_activations_train':
+        dst = './output/predictions/' + '_'.join(args.concepts.split(',')) + '/'
+        if not os.path.exists(dst):
+            os.mkdir(dst)
         # save predictions for creating decision tree / decision rules
-        np.save('./output_train/' + '_'.join(args.concepts.split(',')), predictions)
+        np.save(dst + 'predictions_train', predictions)
 
     return top1.avg, losses.avg
 
@@ -583,16 +546,16 @@ def train_baseline(train_loader, model, criterion, optimizer, epoch):
         # the hooks are used to track the gradient updates in layers that have hooks
         input_var = torch.autograd.Variable(input_img)
         target_var = torch.autograd.Variable(target)
-        output = model(input_var)  # compute model output
-        # activate these lines in case of model with 1 output neuron
+        output = model(input_var)  # compute model predictions_test
+        # activate these lines in case of model with 1 predictions_test neuron
         # target_var = target_var.unsqueeze(1)
         # target_var = target_var.float()
         # ###########
         loss = criterion(output, target_var)  # update the loss function
         # measure accuracy and record loss
-        [prec1] = accuracy(output.data, target, topk=(1,))
+        [acc] = accuracy(output.data, target, topk=(1,))
         losses.update(loss.data, input_img.size(0))
-        top1.update(prec1.item(), input_img.size(0))
+        top1.update(acc.item(), input_img.size(0))
         # compute gradient and do loss step
         optimizer.zero_grad()
         loss.backward()
@@ -606,109 +569,62 @@ def train_baseline(train_loader, model, criterion, optimizer, epoch):
                   f'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   f'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   f'Loss {losses.val:.4f} ({losses.avg:.4f})\t'
-                  f'Prec@1 {top1.val:.3f} ({top1.avg:.3f})')
+                  f'Accuracy {top1.val:.3f} ({top1.avg:.3f})')
 
     return losses.avg, top1.avg
 
 
-def plot_figures(arguments, model, test_loader_with_path, conceptdir, test_loader, criterion):
+def plot_figures(arguments, model, test_loader_with_path, conceptdir):
     """
     :param arguments: arguments given by user
     :param model: model used for training
     :param test_loader_with_path: data loader with test images (including path)
     :param conceptdir: directory containing concept images from test set
-    :param test_loader: data loader with test images (without path)
-    :param criterion: loss function
     :return: visualizations (correlation matrix, highly activated images, concept pureness, etc.) of CW results
     """
     concept_name = arguments.concepts.split(',')
-
-    if not os.path.exists('./plot/' + '_'.join(concept_name)):
-        os.mkdir('./plot/' + '_'.join(concept_name))
+    dst = './plot/' + '_'.join(args.concepts.split(',')) + '/' + args.arch + '/'
+    if not os.path.exists(dst):
+        os.mkdir(dst)
 
     # if using the ordinary model without cw, just plot the correlation matrix in the BN layer
-    if args.arch == "deepmir_v2_bn" or args.arch == "deepmir_vfinal_bn":
-        print("Plot correlation")
-        plot_correlation_BN(arguments, test_loader_with_path, model, layer=args.whitened_layers)
-    # if using a CW model, the other plot functions are interesting
-    elif args.arch == "deepmir_v2_cw" or args.arch == "deepmir_vfinal_cw":
-        # in case of more than 1 whitening layer, loop over the layers and run the different plot functions
-        if len(args.whitened_layers) > 1:
-            # split the layers in the whitened_layers string to get the individual layers
-            whitened_layers = [int(x) for x in arguments.whitened_layers.split(',')]
-            for layer in whitened_layers:
-                print("Plot correlation")
-                plot_correlation(arguments, test_loader_with_path, model, layer=str(layer),
-                                 evaluate=arguments.type_training, fold='0')
-                print("Plot intra- and inter-concept similarities")
-                intra_concept_dot_product_vs_inter_concept_dot_product(arguments, conceptdir, str(layer),
-                                                                       plot_cpt=arguments.concepts.split(','),
-                                                                       arch='deepmir_resnet_cw', model=model)
-                print("Plot concept importance for overall classifier")
-                # NOTE: to use this function, the batch size should be > 1 as the batch size defines the permutations
-                concept_permutation_importance(arguments, test_loader, layer, criterion,
-                                               num_concepts=len(arguments.concepts.split(',')), model=model)
-            print("Plot top50 activated images")
-            # False is if you want the top50 concept images for the whitened layer and the assigned neuron,
-            # otherwise you can say for which layer neuron in that layer you want the top 50
-            plot_concept_top50(arguments, test_loader_with_path, model, arguments.whitened_layers, False,
-                               activation_mode=arguments.act_mode, evaluate=arguments.type_training, fold='0')
-            plot_top10(arguments, plot_cpt=arguments.concepts.split(','), layer=arguments.whitened_layers,
-                       evaluate=arguments.type_training, fold='0')
-            print("Plot 2d slice of representation")
-            plot_concept_representation(args, test_loader_with_path, model, args.whitened_layers,
-                                        plot_cpt=[concept_name[0], concept_name[1]], activation_mode=args.act_mode)
-            print("Plot trajectory")
-            plot_trajectory(args, test_loader_with_path, args.whitened_layers, plot_cpt=[concept_name[0],
-                                                                                         concept_name[1]], model=model)
-            print("Plot AUC-concept_purity")
-            plot_auc_cw(args, conceptdir, whitened_layers=args.whitened_layers, plot_cpt=concept_name,
-                        activation_mode=args.act_mode)
-            print("AUC plotting")
-            plot_auc(args, plot_cpt=concept_name)
+    if args.arch == "deepmir_v2_cw" or args.arch == "deepmir_vfinal_cw":
+        # TODO: add here the pretty labels for the x and y axes of the plots (with newline...)
+        # ticklabels_xaxis = ['Large\nterminal\nloop', 'At least\n90% base\npairs and\nwobbles in\nstem',
+        #                     'Large\nasymmetric\nbulge\ninstead\nof terminal\nloop', 'Large\nasymmetric\nbulge',
+        #                     'U-G-U\nmotif', 'A-U pairs\nmotif']
+        ticklabels_xaxis = ['Large asymmetric bulge', 'At least 90% base\npairs and wobbles in\nstem']
+        # ticklabels_yaxis = ['Large terminal\nloop', 'At least 90%\nbase pairs and\nwobbles in stem',
+        #                     'Large asymmetric\nbulge instead\nof terminal loop', 'Large asymmetric\nbulge',
+        #                     'U-G-U motif', 'A-U pairs motif']
+        ticklabels_yaxis = ['Large\nasymmetric\nbulge', 'At least\n90% base\npairs and\nwobbles in\nstem']
+        print("Plot correlation in CW layer of CW model")
+        plot_correlation(dst, args, test_loader_with_path, model, args.whitened_layers)
+        print("Collect 50 most activated images and plot the top 10")
+        # False is if you want the top50 concept images for the whitened layer and the assigned neuron,
+        # otherwise you can say for which layer neuron in that layer you want the top 50
+        plot_concept_top50(args, test_loader_with_path, model, args.whitened_layers, False, args.act_mode, dst)
+        plot_top10(args.concepts.split(','), args.whitened_layers, args.type_training, dst)
+        # use below if you want to get the most activated images for another neuron (and specify which neuron)
+        plot_concept_top50(args, test_loader_with_path, model, args.whitened_layers, 4, args.act_mode, dst)
+        plot_concept_top50(args, test_loader_with_path, model, args.whitened_layers, 36, args.act_mode, dst)
+        print("Plot intra- and inter-concept similarities")
+        intra_concept_dot_product_vs_inter_concept_dot_product(args, conceptdir, args.whitened_layers,
+                                                               args.concepts.split(','), 'deepmir_vfinal_cw',
+                                                               model, ticklabels_xaxis, ticklabels_yaxis)
 
-        else:
-            print("Plot correlation")
-            plot_correlation(args, test_loader_with_path, model, layer=args.whitened_layers,
-                             evaluate=args.type_training, fold='0')
-            print("Plot top50 activated images")
-            # False is if you want the top50 concept images for the whitened layer and the assigned neuron,
-            # otherwise you can say for which layer neuron in that layer you want the top 50
-            # plot_concept_top50(args, test_loader_with_path, model, args.whitened_layers, False,
-            #                    activation_mode=args.act_mode, evaluate=args.type_training, fold='0')
-            # plot_top10(args, plot_cpt=args.concepts.split(','), layer=args.whitened_layers, evaluate=args.type_training,
-            #            fold='0')
-            # use below if you want to get the most act images for another neuron (and specify which neuron)
-            plot_concept_top50(args, test_loader_with_path, model, args.whitened_layers, 4,
-                               activation_mode=args.act_mode, evaluate=args.type_training, fold='1')
-            plot_concept_top50(args, test_loader_with_path, model, args.whitened_layers, 36,
-                               activation_mode=args.act_mode, evaluate=args.type_training, fold='1')
-            # print("Plot 2d slice of representation")
-            # plot_concept_representation(args, test_loader_with_path, model, args.whitened_layers,
-            #                             plot_cpt=[concept_name[0], concept_name[1]], activation_mode=args.act_mode)
-            print("Plot intra- and inter-concept similarities")
-            intra_concept_dot_product_vs_inter_concept_dot_product(args, conceptdir, args.whitened_layers,
-                                                                   plot_cpt=args.concepts.split(','),
-                                                                   arch='deepmir_resnet_cw_v3', model=model)
+        print("Plot AUC-concept_purity")
+        plot_auc_cw(args, conceptdir, whitened_layers=args.whitened_layers, plot_cpt=concept_name,
+                    activation_mode=args.act_mode, concept_labels=ticklabels_xaxis)
 
-            # # print("Plot concept importance for overall classifier")
-            # # NOTE: to use this function, the batch size should be > 1 as the batch size size is used to define the
-            # # switching of axes! Also, I need a shuffled test set because the function uses the activation values for
-            # # a concept to switch them and then compute the loss and acc (and the difference wrt the original loss and
-            # # acc is defined as the concept importance)
-            # # concept_permutation_importance_targets(args, test_loader, args.whitened_layers, criterion,
-            # #                                        num_concepts=len(args.concepts.split(',')), model=model)
-
-            print("Plot AUC-concept_purity")
-            plot_auc_cw(args, conceptdir, whitened_layers=args.whitened_layers, plot_cpt=concept_name,
-                        activation_mode=args.act_mode)
-
-            print("Plot receptive field over most activated img")
-            saliency_map_concept_cover(args, args.whitened_layers, num_concepts=len(args.concepts.split(',')),
-                                       model=model)
-            # one below is for checking the other neurons in the layer that are not aligned with concepts
-            # nodes variable is for the highly activated nodes one wants to check
-            # saliency_map_concept_cover_2(args, test_loader, args.whitened_layers, nodes=[4, 36], model=model)
+        print("Plot receptive field over most activated img")
+        saliency_map_concept_cover(args, args.whitened_layers, num_concepts=len(args.concepts.split(',')),
+                                   model=model)
+        # one below is for checking the other neurons in the layer that are not aligned with concepts
+        # nodes variable is for the highly activated neurons one wants to check
+        # give the list of neurons from the lowest to the highest first number of the neuron index
+        saliency_map_cover_most_activated_neuron(args, args.whitened_layers, 4, [36, 4], model)
+        saliency_map_cover_most_activated_neuron(args, args.whitened_layers, 36, [36, 4], model)
 
 
 def save_checkpoint(state, is_best, prefix, checkpoint_folder='./checkpoints', fold_n=None):
@@ -726,7 +642,7 @@ def save_checkpoint(state, is_best, prefix, checkpoint_folder='./checkpoints', f
         filename = os.path.join(checkpoint_folder, args.arch, f'{prefix}_checkpoint.pth.tar')
         torch.save(state, filename)
         if is_best:
-            shutil.copyfile(filename, os.path.join(checkpoint_folder, f'{prefix}_model_best.pth.tar'))
+            shutil.copyfile(filename, os.path.join(checkpoint_folder, args.arch, f'{prefix}_model_best.pth.tar'))
     else:
         concept_name = '_'.join(args.concepts.split(','))
         if not os.path.exists(os.path.join(checkpoint_folder, concept_name)):
@@ -775,7 +691,7 @@ def adjust_learning_rate(arguments, optimizer, epoch):
 
 def accuracy(output, target, topk=(1,)):
     """
-    :param output: model output (prediction)
+    :param output: model predictions_test (prediction)
     :param target: target value (true)
     :param topk: specification for the number of additional instances that need accuracy calculation (top-k accuracy)
     :return: computes the precision@k for the specified values of k
@@ -785,30 +701,10 @@ def accuracy(output, target, topk=(1,)):
 
     # for CrossEntropyLoss use below
     _, pred = output.topk(maxk, 1, True, True)
-    # in case of 1 output node and BCEloss use below
-    # pred = (output > 0.5).float()
+    # in case of 1 predictions_test node and BCEloss use below
+    # pred = (predictions_test > 0.5).float()
     pred = pred.t()
 
-    correct = pred.eq(target.view(1, -1).expand_as(pred))
-
-    res = []
-    for k in topk:
-        correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
-        res.append(correct_k.mul_(100.0 / batch_size))
-    return res
-
-
-def accuracy_CI_targets(output, target, topk=(1,)):
-    """
-    :param output: model output (prediction)
-    :param target: target value (true)
-    :param topk: specification for the number of additional instances that need accuracy calculation (top-k accuracy)
-    :return: computes the precision@k for the specified values of k
-    """
-    maxk = max(topk)
-    batch_size = 1
-    _, pred = output.topk(maxk, 1, True, True)
-    pred = pred.t()
     correct = pred.eq(target.view(1, -1).expand_as(pred))
 
     res = []
@@ -861,9 +757,7 @@ def balanced_data_loader(arguments, dataset_dir):
     :return: data loader that uses balanced class weights to balance the data that is fed to the model
     """
 
-    dataset = datasets.ImageFolder(dataset_dir, transforms.Compose([
-        transforms.ToTensor(),
-    ]))
+    dataset = datasets.ImageFolder(dataset_dir, transforms.Compose([transforms.ToTensor(), ]))
 
     # For unbalanced dataset we create a weighted sampler
     weights = make_weights_for_balanced_classes(dataset.imgs, len(dataset.classes))
