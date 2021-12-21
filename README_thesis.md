@@ -48,7 +48,7 @@ are evaluated. This includes both the classification performance on the detectio
   train_premirna.py file, the learning of concepts, and their importance for the detection task using the plot_functions_cw.py
   and concept_influence.py file, which is stored in the report_figures folder. 
 
-![img.png](img.png)
+![CW_framework.pdf](CW_framework.pdf)
 
 
 #### Prerequisites
